@@ -1,7 +1,6 @@
 metadrive-simulator @ git+https://github.com/metadriverse/metadrive.git@85e5dadc6c7436d324348f6e3d8f8e680c06b4db
 stable-baselines3[extra]>=2.3.0
-sb3-contrib>=2.3.0
-gymnasium>=0.29.1
+gymnasium>=0.29.1,<2.0
 numpy>=1.24
 pandas>=2.0
 pyyaml>=6.0

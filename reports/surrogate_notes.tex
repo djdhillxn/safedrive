@@ -1,0 +1,114 @@
+\documentclass[10pt]{article}
+
+\usepackage[margin=0.8in]{geometry}
+\usepackage{booktabs}
+\usepackage[hidelinks]{hyperref}
+
+\title{SafeRL-Drive Phase-1 Surrogate Notes}
+\author{Dheeraj Dhillon}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Purpose}
+This document is the detailed internal companion to \texttt{main.tex}. It is intended for
+experiment bookkeeping, future Codex context, failed attempts, and decisions that would
+be distracting in the portfolio report. Update it after each substantial Colab session.
+
+\section{Canonical experiment order}
+\begin{enumerate}
+  \item Run the smoke test; do not use it as a report result.
+  \item Evaluate the MetaDrive IDM baseline on 50 unseen scenarios.
+  \item Train PPO and save its complete run directory.
+  \item Train SAC and save its complete run directory.
+  \item Evaluate both best models on 50 unseen scenarios.
+  \item Record one top-down rollout per learned agent.
+  \item Generate the IDM--PPO--SAC comparison.
+  \item Fill the report placeholders and compile \texttt{main.tex}.
+\end{enumerate}
+
+\section{Exact commands}
+Run from the repository root:
+\begin{verbatim}
+python -m scripts.train --config configs/smoke_test.yaml
+python -m scripts.evaluate_baseline --config configs/ppo_mvp.yaml \
+  --episodes 50 --prefix idm_unseen
+python -m scripts.train --config configs/ppo_mvp.yaml
+python -m scripts.train --config configs/sac_mvp.yaml
+python -m scripts.evaluate --run-dir <PPO_RUN> --model best \
+  --episodes 50 --prefix best_unseen
+python -m scripts.evaluate --run-dir <SAC_RUN> --model best \
+  --episodes 50 --prefix best_unseen
+python -m scripts.record_video --run-dir <PPO_RUN> --model best --steps 1000
+python -m scripts.record_video --run-dir <SAC_RUN> --model best --steps 1000
+python -m scripts.compare_runs --phase1
+latexmk -pdf -interaction=nonstopmode -halt-on-error reports/main.tex
+\end{verbatim}
+
+\section{Phase-1 configuration record}
+\begin{tabular}{lll}
+  \toprule
+  Setting & PPO & SAC \\
+  \midrule
+  Timesteps & 500,000 & 500,000 \\
+  Policy & MLP & MLP \\
+  Action space & Continuous & Continuous \\
+  Vector environments & 4 subprocess & 1 dummy \\
+  Observation normalization & Yes & Yes \\
+  Training start seed & 0 & 0 \\
+  Evaluation start seed & 1000 & 1000 \\
+  Evaluation episodes & 50 & 50 \\
+  \bottomrule
+\end{tabular}
+
+Exact algorithm hyperparameters live in \texttt{configs/ppo\_mvp.yaml} and
+\texttt{configs/sac\_mvp.yaml}. Each run also contains the immutable
+\texttt{resolved\_config.yaml} used for that run.
+
+\section{Colab runtime metadata}
+Record the following from each long run's \texttt{logs/train.log} and
+\texttt{run\_metadata.json}:
+\begin{itemize}
+  \item Date and Colab runtime type: TODO
+  \item Git commit: TODO
+  \item Python, MetaDrive, Stable-Baselines3, and Gymnasium versions: TODO
+  \item CUDA availability and GPU name: TODO
+  \item Wall-clock start/end and interruptions: TODO
+  \item Drive backup location: \texttt{/content/drive/MyDrive/SafeDrive}
+\end{itemize}
+
+\section{Observed results}
+\begin{itemize}
+  \item IDM summary: TODO
+  \item PPO best-model summary: TODO
+  \item SAC best-model summary: TODO
+  \item Comparison interpretation: TODO
+  \item Representative video observations: TODO
+\end{itemize}
+
+\section{Failed attempts and implementation notes}
+\begin{itemize}
+  \item The repository is public, so Colab cloning should not use a personal access token.
+  \item Colab may include the obsolete \texttt{gym} distribution. The notebooks remove it
+        before installing SafeDrive, which uses Gymnasium.
+  \item Evaluation must reset within the configured unseen seed range beginning at 1000.
+  \item Treat \texttt{/content/safedrive} as the live checkout. Mounted Drive is only for
+        persistent artifacts because many small Drive-backed file operations are slow.
+  \item Add dated notes and complete exception messages here; detailed stack traces remain
+        in the run log files.
+\end{itemize}
+
+\section{Unresolved issues}
+\begin{itemize}
+  \item Final numerical results and report placeholders: TODO after long runs.
+  \item Whether 1,000,000 timesteps materially improves either agent: optional manual test.
+  \item Local macOS versus Colab runtime differences: TODO after both smoke tests.
+\end{itemize}
+
+\section{Deferred Phase-2 ideas}
+Seed sweeps, richer observation studies, and explicit safety interventions are intentionally
+outside Phase 1. Revisit them only after the current IDM--PPO--SAC matrix has complete,
+reproducible artifacts and a finished report.
+
+\end{document}

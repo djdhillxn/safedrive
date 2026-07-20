@@ -4,15 +4,17 @@ experiment:
   output_dir: runs
   seed: 0
   tensorboard: false
+  latest_name: smoke
 
 train:
-  total_timesteps: 2000
+  total_timesteps: 512
   n_envs: 1
   vec_env: dummy
+  progress_bar: true
   normalize_obs: true
   normalize_reward: false
-  checkpoint_freq: 1000
-  eval_freq: 1000
+  checkpoint_freq: 256
+  eval_freq: 256
   eval_episodes: 2
 
 algorithm:
@@ -20,13 +22,13 @@ algorithm:
   policy: MlpPolicy
   kwargs:
     learning_rate: 0.0003
-    n_steps: 256
+    n_steps: 128
     batch_size: 64
     n_epochs: 2
     gamma: 0.99
     gae_lambda: 0.95
     clip_range: 0.2
-    verbose: 1
+    verbose: 0
 
 metadrive:
   use_render: false
@@ -47,3 +49,8 @@ eval:
   traffic_density: 0.0
   episodes: 2
   deterministic: true
+  progress: true
+
+logging:
+  console_level: INFO
+  file_level: DEBUG

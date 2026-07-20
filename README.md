@@ -1,204 +1,179 @@
 # SafeRL-Drive: MetaDrive MVP with PPO and SAC
 
-Phase-1 pet/research project for autonomous-driving reinforcement learning in closed-loop simulation.
+SafeRL-Drive is a focused Phase-1 autonomous-driving reinforcement-learning project. It
+trains continuous-control PPO and SAC agents in MetaDrive, evaluates them on unseen
+procedural scenarios, and compares them with MetaDrive's rule-based IDM controller.
 
-This repo trains and evaluates **PPO** and **SAC** agents in **MetaDrive** using **Stable-Baselines3**. The goal is not to claim “Tesla-style self-driving,” but to build a credible, reproducible RL autonomy benchmark with:
-
-- continuous vehicle control in MetaDrive,
-- PPO and SAC baselines,
-- unseen-scenario evaluation,
-- closed-loop driving metrics,
-- top-down rollout videos,
-- training/evaluation plots.
+The project uses vector observations and records success, collision, off-road, timeout,
+route-completion, return, cost, speed, and episode-length metrics. Every experiment keeps
+its resolved config, detailed logs, metadata, and artifacts in one run directory.
 
 ## Project structure
 
 ```text
-saferl-drive-metadrive-mvp/
+safedrive/
 ├── configs/
-│   ├── ppo_mvp.yaml          # PPO baseline config
-│   ├── sac_mvp.yaml          # SAC baseline config
-│   └── smoke_test.yaml       # tiny installation/sanity test
+│   ├── ppo_mvp.yaml
+│   ├── sac_mvp.yaml
+│   └── smoke_test.yaml
 ├── notebooks/
-│   └── colab_smoke_test.ipynb # VS Code/Colab/Drive connection test
+│   ├── colab_smoke_test.ipynb
+│   └── phase1_colab_driver.ipynb
+├── reports/
+│   ├── main.tex
+│   ├── surrogate_notes.tex
+│   └── references.bib
 ├── saferl_drive/
-│   ├── algorithms.py         # PPO/SAC construction
-│   ├── config.py             # YAML loading and CLI overrides
-│   ├── envs.py               # MetaDrive + SB3 VecEnv factories
-│   ├── evaluation.py         # AV-specific closed-loop metrics
-│   └── utils.py              # general helpers and plots
+│   ├── algorithms.py
+│   ├── config.py
+│   ├── envs.py
+│   ├── evaluation.py
+│   └── utils.py
 ├── scripts/
-│   ├── train.py              # train PPO/SAC
-│   ├── evaluate.py           # evaluate final/best model
-│   ├── record_video.py       # top-down rollout video
-│   ├── plot_results.py       # generate plots
-│   └── compare_runs.py       # compare PPO vs SAC summaries
-├── requirements.txt
+│   ├── train.py
+│   ├── evaluate.py
+│   ├── evaluate_baseline.py
+│   ├── record_video.py
+│   ├── plot_results.py
+│   └── compare_runs.py
 ├── pyproject.toml
-└── README.md
+└── requirements.txt
 ```
 
 ## Installation
 
-Create a clean environment. Python 3.10 or 3.11 is usually the safest choice for simulation/RL packages.
+Python 3.10 or 3.11 is the safest local choice for simulation packages. Current Colab
+runtimes use Python 3.12, so MetaDrive is pinned to an upstream revision that supports it.
 
 ```bash
 conda create -n saferl-drive python=3.10 -y
 conda activate saferl-drive
-
-cd saferl-drive-metadrive-mvp
+cd safedrive
 pip install -e .
 ```
 
-The MetaDrive simulator is pinned to an upstream revision that supports Python 3.12, which is
-used by current Colab runtimes. The latest PyPI release of `metadrive-simulator` still declares
-Python `<3.12` support.
+SafeRL-Drive uses Gymnasium. The Colab notebooks remove the obsolete `gym` distribution
+before installation so Stable-Baselines3 does not print Gym's maintenance warning.
 
-Quick sanity check:
+## Phase-1 experiment plan
+
+Run only this limited matrix, in order:
+
+1. **Smoke test** — verify MetaDrive, Stable-Baselines3, training, evaluation, plotting,
+   and artifact creation with `configs/smoke_test.yaml`. This is not a report result.
+2. **IDM baseline** — evaluate MetaDrive's `IDMPolicy` without training for 50 unseen
+   episodes beginning at seed 1000.
+3. **PPO** — train one continuous-control vector-observation run for 500,000 timesteps
+   using four subprocess environments.
+4. **SAC** — train one comparable run for 500,000 timesteps using one environment.
+5. **Best-model evaluation** — explicitly evaluate the PPO and SAC best checkpoints on
+   50 unseen scenarios.
+6. **Videos** — record one top-down best-model rollout for PPO and one for SAC.
+7. **Final comparison** — compare IDM, PPO, and SAC and write the Phase-1 CSV, JSON, and
+   plot.
+8. **Report generation** — fill the result placeholders and compile the LaTeX report.
+
+Training scenarios begin at seed 0. Evaluation scenarios begin at seed 1000, so the
+reported evaluation roads are disjoint from the training range. Phase 1 intentionally has
+one training run for PPO and one for SAC; it does not run seed sweeps.
+
+## Google Colab driver notebook
+
+Use [`notebooks/phase1_colab_driver.ipynb`](notebooks/phase1_colab_driver.ipynb) from VS
+Code connected to a Google Colab runtime. The notebook uses this layout:
+
+```text
+VS Code --git push--> GitHub --clone/pull--> /content/safedrive
+                                                   |
+                                                   +--> /content/drive/MyDrive/SafeDrive
+                                                        persistent artifacts only
+```
+
+GitHub and `/content/safedrive` are the source of truth for code. Do not run the repository
+directly from mounted Drive; Drive is slower for many small files and is used only to back
+up completed run directories, comparison outputs, and reports.
+
+Notebook run order:
+
+1. Define paths and experiment constants.
+2. Check the runtime, GPU, and PyTorch CUDA status.
+3. Mount Drive and approve Google's authentication prompt.
+4. Clone or fast-forward pull the public GitHub repository.
+5. Remove legacy Gym and install the repository with `pip install -e .`.
+6. Run the smoke test.
+7. Run the IDM baseline and copy it to Drive.
+8. Run PPO and copy it to Drive.
+9. Run SAC and copy it to Drive.
+10. Evaluate the best PPO and SAC models.
+11. Record one video for each learned agent.
+12. Build and display the Phase-1 comparison.
+13. Compile the report if `latexmk` is available.
+14. Perform the final `runs/` and `reports/` sync to Drive.
+
+The long experiment sections are independent. In a later Colab session, rerun the setup
+sections and then continue from the required experiment. `FULL_TIMESTEPS` defaults to
+500,000 and can be changed to 1,000,000 at the top of the notebook for an intentionally
+longer run. The smaller `notebooks/colab_smoke_test.ipynb` remains available as a quick
+VS Code, Colab, GitHub, Drive, GPU, and headless-MetaDrive connection check.
+
+## Command-line workflow
+
+Run the smoke test first:
 
 ```bash
 python -m scripts.train --config configs/smoke_test.yaml
 ```
 
-That should create a small run under `runs/` and verify that MetaDrive, Stable-Baselines3, training, evaluation, and plotting are wired correctly.
+Evaluate the rule-based IDM baseline:
 
-## VS Code and Google Colab
-
-Use `notebooks/colab_smoke_test.ipynb` to verify the complete remote workflow before
-starting a training run. The intended layout is:
-
-```text
-VS Code working tree --git push--> GitHub --clone/pull--> Colab /content/safedrive
-                                                           |
-                                                           +--> Google Drive/SafeDrive
-                                                                (results and checkpoints)
+```bash
+python -m scripts.evaluate_baseline \
+  --config configs/ppo_mvp.yaml \
+  --episodes 50 \
+  --prefix idm_unseen
 ```
 
-GitHub is the source of truth for code. Google Drive is persistent artifact storage, not a
-second Git working tree. Running the repository directly from mounted Drive is discouraged
-because Drive-backed operations are slower and can fail when many small files are involved.
-
-Before the first test:
-
-1. Commit and push the local branch so Colab can clone the same revision.
-2. Open `notebooks/colab_smoke_test.ipynb` in VS Code.
-3. Choose **Select Kernel > Colab > New Colab Server**, sign in to Google, and select a GPU
-   machine. **Auto Connect** is enough when a GPU is not required.
-4. Run the notebook from top to bottom. Approve the separate Google Drive mount prompt.
-5. No GitHub token is needed while the repository remains public.
-
-The notebook verifies the remote runtime, executes a small CUDA calculation, mounts and writes
-to Drive, installs SafeDrive, and steps a headless MetaDrive environment. It intentionally does
-not start RL training or consume more compute than needed for the connection test.
-
-Colab currently includes the obsolete OpenAI Gym package. The install cell removes it before
-importing Stable-Baselines3; SafeDrive and MetaDrive use the maintained Gymnasium API.
-
-The workflow follows the [official Colab VS Code extension guide](https://github.com/googlecolab/colab-vscode/wiki/User-Guide).
-Google notes that Colab VMs are temporary and recommends reducing reads and writes through a
-[mounted Drive filesystem](https://research.google.com/colaboratory/faq.html). Also, a GPU does
-not automatically make the current PPO configuration faster: Stable-Baselines3 recommends CPU
-execution for [PPO with an MLP policy](https://stable-baselines3.readthedocs.io/en/v2.8.0/modules/ppo.html).
-The GPU connection test is still useful now and becomes more relevant for larger networks or
-image-based policies later.
-
-## Train PPO
+Train PPO and SAC:
 
 ```bash
 python -m scripts.train --config configs/ppo_mvp.yaml
+python -m scripts.train --config configs/sac_mvp.yaml
 ```
 
-Useful laptop-friendly override:
-
-```bash
-python -m scripts.train --config configs/ppo_mvp.yaml \
-  train.total_timesteps=200000 \
-  train.n_envs=2 \
-  train.vec_env=dummy
-```
-
-Stronger run:
+Dotlist overrides remain available:
 
 ```bash
 python -m scripts.train --config configs/ppo_mvp.yaml \
   train.total_timesteps=1000000 \
-  metadrive.num_scenarios=100 \
-  eval.episodes=100
+  eval.episodes=50
 ```
 
-## Train SAC
+The successful runs update `runs/latest_idm.txt`, `runs/latest_ppo.txt`, and
+`runs/latest_sac.txt`. The smoke test uses `runs/latest_smoke.txt`, so it cannot replace the
+latest report-quality PPO pointer.
 
-```bash
-python -m scripts.train --config configs/sac_mvp.yaml
-```
-
-Useful shorter run:
-
-```bash
-python -m scripts.train --config configs/sac_mvp.yaml \
-  train.total_timesteps=200000 \
-  eval.episodes=30
-```
-
-## Evaluate a trained run
-
-After training, each run directory will look something like:
-
-```text
-runs/20260426_123456_ppo_mvp_ppo_seed0/
-```
-
-Evaluate final model:
+Evaluate a trained best model:
 
 ```bash
 python -m scripts.evaluate \
-  --run-dir runs/20260426_123456_ppo_mvp_ppo_seed0 \
-  --model final \
-  --episodes 50
-```
-
-Evaluate best SB3 EvalCallback model:
-
-```bash
-python -m scripts.evaluate \
-  --run-dir runs/20260426_123456_ppo_mvp_ppo_seed0 \
+  --run-dir runs/<ppo-run> \
   --model best \
   --episodes 50 \
   --prefix best_unseen
 ```
 
-Outputs:
-
-```text
-run_dir/eval/*_episodes.csv
-run_dir/eval/*_summary.json
-run_dir/plots/eval_route_completion.png
-run_dir/plots/eval_outcome_rates.png
-```
-
-## Record a rollout video
+If an interrupted short run did not create `best_model.zip`, the evaluation command gives
+a clear error and can be rerun with `--model final`. Video recording falls back from best
+to final automatically with a warning:
 
 ```bash
 python -m scripts.record_video \
-  --run-dir runs/20260426_123456_ppo_mvp_ppo_seed0 \
+  --run-dir runs/<ppo-run> \
   --model best \
   --steps 1000
 ```
 
-Output:
-
-```text
-run_dir/videos/ppo_best_topdown.mp4
-```
-
-## Plot results
-
-```bash
-python -m scripts.plot_results \
-  --run-dir runs/20260426_123456_ppo_mvp_ppo_seed0
-```
-
-## Compare PPO and SAC
+Manual summary comparison is still supported:
 
 ```bash
 python -m scripts.compare_runs \
@@ -208,78 +183,86 @@ python -m scripts.compare_runs \
   --output runs/ppo_vs_sac_eval_summary.png
 ```
 
-## Metrics collected
+After the IDM, PPO, and SAC latest pointers exist, generate the complete comparison with:
 
-Per episode:
-
-- return,
-- episode length,
-- success flag,
-- collision flag,
-- out-of-road flag,
-- max-step/timeout flag,
-- cumulative cost,
-- route completion,
-- mean speed when exposed by the simulator,
-- final MetaDrive `info` dictionary.
-
-Summary metrics:
-
-- mean return,
-- success rate,
-- collision rate,
-- out-of-road rate,
-- timeout/max-step rate,
-- mean cost,
-- mean route completion.
-
-## Config philosophy
-
-Training scenarios and evaluation scenarios are intentionally separated by seed range.
-
-Default training:
-
-```yaml
-metadrive:
-  start_seed: 0
-  num_scenarios: 50
+```bash
+python -m scripts.compare_runs --phase1
 ```
 
-Default evaluation:
+## Expected outputs
 
-```yaml
-eval:
-  start_seed: 1000
-  num_scenarios: 50
+Each training run contains:
+
+```text
+run_dir/
+├── resolved_config.yaml
+├── run_metadata.json
+├── logs/
+│   ├── train.log
+│   ├── train_monitor/*.monitor.csv
+│   └── tensorboard/                 # when enabled
+├── models/
+│   ├── final_model.zip
+│   ├── best_model.zip               # when EvalCallback runs
+│   ├── vecnormalize.pkl
+│   └── replay_buffer.pkl             # SAC
+├── checkpoints/
+├── eval/
+│   ├── final_unseen_episodes.csv
+│   ├── final_unseen_summary.json
+│   ├── best_unseen_episodes.csv      # after explicit best evaluation
+│   └── best_unseen_summary.json
+├── plots/
+│   ├── training_returns.png
+│   ├── eval_route_completion.png
+│   └── eval_outcome_rates.png
+└── videos/
+    └── <algorithm>_<best-or-final>_topdown.mp4
 ```
 
-This gives you a clean train/test split over procedurally generated roads.
+The IDM run uses the same evaluation CSV, summary JSON, plots, log, and metadata layout,
+without models or training. The project-level final outputs are:
 
-## Phase-1 resume framing
+```text
+runs/phase1_manifest.jsonl
+runs/phase1_comparison.csv
+runs/phase1_comparison.json
+runs/phase1_comparison.png
+runs/phase1_training_returns.png       # when both monitor logs are available
+runs/phase1_compare.log
+reports/main.pdf                       # when LaTeX is compiled
+```
 
-Once you have real numbers, a strong resume entry could look like:
+Console output is intentionally concise. Detailed arguments, system and package versions,
+Git commit, CUDA/GPU information, resolved configuration, paths, and exception stack traces
+live in each operation's log file.
 
-> **SafeRL-Drive: Reinforcement Learning for Autonomous Driving** — Built a closed-loop autonomous-driving simulation benchmark in MetaDrive, training PPO and SAC agents for continuous vehicle control across procedurally generated traffic scenarios.
+## Metrics
 
-> Evaluated policies on unseen road seeds using route completion, collision rate, out-of-road rate, cumulative safety cost, and success rate; generated rollout videos and PPO-vs-SAC comparison plots for reproducible analysis.
+Per-episode CSV files include the episode number, scenario seed, return, length, success,
+collision, off-road, timeout, cumulative cost, route completion, mean speed, and serialized
+final MetaDrive `info` data.
 
-After results are available, replace generic claims with actual values:
+Summary JSON files include:
 
-> Improved unseen-route success rate from **A%** to **B%** after tuning traffic density, reward weights, and normalization; reduced collision rate by **X%** relative to baseline.
+- episode count;
+- mean and standard deviation of return;
+- mean episode length;
+- success, collision, off-road, and timeout rates;
+- mean cost;
+- mean route completion;
+- mean speed when MetaDrive exposes it.
 
-## Practical notes
+## Report
 
-- Start with `smoke_test.yaml` first.
-- If `subproc` causes issues on macOS, override with `train.vec_env=dummy`.
-- PPO benefits from multiple environments; SAC is configured with one environment by default to keep replay-buffer behavior simple.
-- The default 500k timesteps are meant as an MVP, not a final benchmark. For stronger plots, run 1M+ timesteps and 100+ unseen evaluation episodes.
-- Videos require `imageio-ffmpeg`; it is included in `requirements.txt`.
+`reports/main.tex` is the concise portfolio report. It compiles before results exist and
+uses explicit TODO fields until the final values are copied from
+`runs/phase1_comparison.csv`. `reports/surrogate_notes.tex` holds exact commands,
+hyperparameters, runtime metadata, failed attempts, implementation notes, and deferred
+ideas.
 
-## Suggested Phase-2 extension
+Build from the repository root:
 
-After Phase 1 works, the natural next step is a safety layer:
-
-- TTC-style risk penalty,
-- action shield,
-- cost-constrained evaluation,
-- ablation: PPO/SAC with vs without shield.
+```bash
+latexmk -pdf -interaction=nonstopmode -halt-on-error reports/main.tex
+```

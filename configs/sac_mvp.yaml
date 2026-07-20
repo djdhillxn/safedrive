@@ -10,6 +10,7 @@ train:
   total_timesteps: 500000
   n_envs: 1               # SAC can use VecEnv, but 1 env keeps replay-buffer semantics simple.
   vec_env: dummy
+  progress_bar: true
   normalize_obs: true
   normalize_reward: false
   checkpoint_freq: 100000
@@ -30,7 +31,7 @@ algorithm:
     gradient_steps: 1
     ent_coef: auto
     target_update_interval: 1
-    verbose: 1
+    verbose: 0
     policy_kwargs:
       net_arch: [256, 256]
 
@@ -63,3 +64,8 @@ eval:
   traffic_density: 0.10
   episodes: 50
   deterministic: true
+  progress: true
+
+logging:
+  console_level: INFO
+  file_level: DEBUG

@@ -10,6 +10,7 @@ train:
   total_timesteps: 500000
   n_envs: 4
   vec_env: subproc        # dummy | subproc; use dummy for debugging on Mac if subproc has issues
+  progress_bar: true
   normalize_obs: true
   normalize_reward: false
   checkpoint_freq: 100000
@@ -30,7 +31,7 @@ algorithm:
     ent_coef: 0.0
     vf_coef: 0.5
     max_grad_norm: 0.5
-    verbose: 1
+    verbose: 0
 
 metadrive:
   # Core single-agent procedural driving setup.
@@ -64,3 +65,8 @@ eval:
   traffic_density: 0.10
   episodes: 50
   deterministic: true
+  progress: true
+
+logging:
+  console_level: INFO
+  file_level: DEBUG

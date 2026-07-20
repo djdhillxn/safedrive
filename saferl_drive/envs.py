@@ -4,7 +4,7 @@ import copy
 from pathlib import Path
 
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor, VecNormalize
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
 
 
 def sanitize_metadrive_config(env_config):
@@ -75,7 +75,6 @@ def make_vec_env(
     else:
         raise ValueError(f"Unknown vec_env_type={vec_env_type!r}; expected 'dummy' or 'subproc'.")
 
-    venv = VecMonitor(venv, filename=str(Path(monitor_dir) / "vec_monitor.csv"))
     if normalize_obs or normalize_reward:
         venv = VecNormalize(
             venv,
