@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 authors = [{name = "Luvya"}]
 dependencies = [
-    "metadrive>=0.4.0",
+    "metadrive-simulator @ git+https://github.com/metadriverse/metadrive.git@85e5dadc6c7436d324348f6e3d8f8e680c06b4db",
     "stable-baselines3[extra]>=2.3.0",
     "sb3-contrib>=2.3.0",
     "gymnasium>=0.29.1",

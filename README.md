@@ -19,6 +19,8 @@ saferl-drive-metadrive-mvp/
 │   ├── ppo_mvp.yaml          # PPO baseline config
 │   ├── sac_mvp.yaml          # SAC baseline config
 │   └── smoke_test.yaml       # tiny installation/sanity test
+├── notebooks/
+│   └── colab_smoke_test.ipynb # VS Code/Colab/Drive connection test
 ├── saferl_drive/
 │   ├── algorithms.py         # PPO/SAC construction
 │   ├── config.py             # YAML loading and CLI overrides
@@ -45,9 +47,12 @@ conda create -n saferl-drive python=3.10 -y
 conda activate saferl-drive
 
 cd saferl-drive-metadrive-mvp
-pip install -r requirements.txt
 pip install -e .
 ```
+
+The MetaDrive simulator is pinned to an upstream revision that supports Python 3.12, which is
+used by current Colab runtimes. The latest PyPI release of `metadrive-simulator` still declares
+Python `<3.12` support.
 
 Quick sanity check:
 
@@ -56,6 +61,45 @@ python -m scripts.train --config configs/smoke_test.yaml
 ```
 
 That should create a small run under `runs/` and verify that MetaDrive, Stable-Baselines3, training, evaluation, and plotting are wired correctly.
+
+## VS Code and Google Colab
+
+Use `notebooks/colab_smoke_test.ipynb` to verify the complete remote workflow before
+starting a training run. The intended layout is:
+
+```text
+VS Code working tree --git push--> GitHub --clone/pull--> Colab /content/safedrive
+                                                           |
+                                                           +--> Google Drive/SafeDrive
+                                                                (results and checkpoints)
+```
+
+GitHub is the source of truth for code. Google Drive is persistent artifact storage, not a
+second Git working tree. Running the repository directly from mounted Drive is discouraged
+because Drive-backed operations are slower and can fail when many small files are involved.
+
+Before the first test:
+
+1. Commit and push the local branch so Colab can clone the same revision.
+2. Open `notebooks/colab_smoke_test.ipynb` in VS Code.
+3. Choose **Select Kernel > Colab > New Colab Server**, sign in to Google, and select a GPU
+   machine. **Auto Connect** is enough when a GPU is not required.
+4. Run the notebook from top to bottom. Approve the separate Google Drive mount prompt.
+5. If this repository is private, create a fine-grained GitHub token with read-only access to
+   this repository, save it as `GITHUB_TOKEN` in Colab Secrets, and set `PRIVATE_REPO = True`
+   in the notebook. Never paste the token into a code cell or commit it.
+
+The notebook verifies the remote runtime, executes a small CUDA calculation, mounts and writes
+to Drive, installs SafeDrive, and steps a headless MetaDrive environment. It intentionally does
+not start RL training or consume more compute than needed for the connection test.
+
+The workflow follows the [official Colab VS Code extension guide](https://github.com/googlecolab/colab-vscode/wiki/User-Guide).
+Google notes that Colab VMs are temporary and recommends reducing reads and writes through a
+[mounted Drive filesystem](https://research.google.com/colaboratory/faq.html). Also, a GPU does
+not automatically make the current PPO configuration faster: Stable-Baselines3 recommends CPU
+execution for [PPO with an MLP policy](https://stable-baselines3.readthedocs.io/en/v2.8.0/modules/ppo.html).
+The GPU connection test is still useful now and becomes more relevant for larger networks or
+image-based policies later.
 
 ## Train PPO
 
