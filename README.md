@@ -85,13 +85,14 @@ Before the first test:
 3. Choose **Select Kernel > Colab > New Colab Server**, sign in to Google, and select a GPU
    machine. **Auto Connect** is enough when a GPU is not required.
 4. Run the notebook from top to bottom. Approve the separate Google Drive mount prompt.
-5. If this repository is private, create a fine-grained GitHub token with read-only access to
-   this repository, save it as `GITHUB_TOKEN` in Colab Secrets, and set `PRIVATE_REPO = True`
-   in the notebook. Never paste the token into a code cell or commit it.
+5. No GitHub token is needed while the repository remains public.
 
 The notebook verifies the remote runtime, executes a small CUDA calculation, mounts and writes
 to Drive, installs SafeDrive, and steps a headless MetaDrive environment. It intentionally does
 not start RL training or consume more compute than needed for the connection test.
+
+Colab currently includes the obsolete OpenAI Gym package. The install cell removes it before
+importing Stable-Baselines3; SafeDrive and MetaDrive use the maintained Gymnasium API.
 
 The workflow follows the [official Colab VS Code extension guide](https://github.com/googlecolab/colab-vscode/wiki/User-Guide).
 Google notes that Colab VMs are temporary and recommends reducing reads and writes through a
