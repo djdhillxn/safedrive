@@ -24,8 +24,7 @@ saferl-drive-metadrive-mvp/
 │   ├── config.py             # YAML loading and CLI overrides
 │   ├── envs.py               # MetaDrive + SB3 VecEnv factories
 │   ├── evaluation.py         # AV-specific closed-loop metrics
-│   ├── plotting.py           # training/eval plots
-│   └── utils.py
+│   └── utils.py              # general helpers and plots
 ├── scripts/
 │   ├── train.py              # train PPO/SAC
 │   ├── evaluate.py           # evaluate final/best model

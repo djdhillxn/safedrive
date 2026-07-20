@@ -1,11 +1,7 @@
 """Closed-loop evaluation metrics for MetaDrive policies."""
 
-from __future__ import annotations
-
 import json
-from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -13,20 +9,27 @@ from tqdm import trange
 
 
 SUCCESS_KEYS = ("success", "arrive_dest", "arrive_destination", "arrived_dest")
-CRASH_KEYS = ("crash", "crash_vehicle", "crash_object", "crash_building", "crash_sidewalk", "crash_human")
+CRASH_KEYS = (
+    "crash",
+    "crash_vehicle",
+    "crash_object",
+    "crash_building",
+    "crash_sidewalk",
+    "crash_human",
+)
 OUT_OF_ROAD_KEYS = ("out_of_road", "out_of_route")
 MAX_STEP_KEYS = ("max_step", "timeout", "TimeLimit.truncated")
 ENV_SEED_KEYS = ("env_seed", "scenario_index", "seed")
 
 
-def _safe_bool(info: dict[str, Any], keys: tuple[str, ...]) -> bool:
+def _safe_bool(info, keys):
     for key in keys:
         if key in info and bool(info[key]):
             return True
     return False
 
 
-def _safe_float(info: dict[str, Any], keys: tuple[str, ...], default: float = np.nan) -> float:
+def _safe_float(info, keys, default=np.nan):
     for key in keys:
         if key in info:
             try:
@@ -36,7 +39,7 @@ def _safe_float(info: dict[str, Any], keys: tuple[str, ...], default: float = np
     return default
 
 
-def _safe_int(info: dict[str, Any], keys: tuple[str, ...], default: int = -1) -> int:
+def _safe_int(info, keys, default=-1):
     for key in keys:
         if key in info:
             try:
@@ -46,34 +49,18 @@ def _safe_int(info: dict[str, Any], keys: tuple[str, ...], default: int = -1) ->
     return default
 
 
-@dataclass
-class EpisodeMetrics:
-    episode: int
-    env_seed: int
-    return_sum: float
-    length: int
-    success: bool
-    crash: bool
-    out_of_road: bool
-    max_step: bool
-    cost_sum: float
-    route_completion: float
-    mean_speed_km_h: float
-    final_info: dict[str, Any]
-
-
 def evaluate_policy_closed_loop(
     model,
     env,
-    episodes: int,
-    deterministic: bool = True,
-    progress: bool = True,
-) -> pd.DataFrame:
+    episodes,
+    deterministic=True,
+    progress=True,
+):
     """Evaluate one SB3 policy in a single non-vector MetaDrive environment.
 
     This avoids relying on SB3's reward-only evaluator and collects AV-specific metrics.
     """
-    rows: list[EpisodeMetrics] = []
+    rows = []
     iterator = trange(episodes, desc="Evaluating", disable=not progress)
     for ep in iterator:
         obs, info = env.reset()
@@ -81,9 +68,9 @@ def evaluate_policy_closed_loop(
         ep_return = 0.0
         ep_len = 0
         ep_cost = 0.0
-        speeds: list[float] = []
+        speeds = []
         route_completion = 0.0
-        final_info: dict[str, Any] = {}
+        final_info = {}
 
         while not done:
             action, _ = model.predict(obs, deterministic=deterministic)
@@ -109,25 +96,27 @@ def evaluate_policy_closed_loop(
                     pass
             final_info = dict(info)
 
-        row = EpisodeMetrics(
-            episode=ep,
-            env_seed=_safe_int(final_info, ENV_SEED_KEYS, default=-1),
-            return_sum=ep_return,
-            length=ep_len,
-            success=_safe_bool(final_info, SUCCESS_KEYS),
-            crash=_safe_bool(final_info, CRASH_KEYS),
-            out_of_road=_safe_bool(final_info, OUT_OF_ROAD_KEYS),
-            max_step=_safe_bool(final_info, MAX_STEP_KEYS),
-            cost_sum=ep_cost,
-            route_completion=_safe_float(final_info, ("route_completion",), default=route_completion),
-            mean_speed_km_h=float(np.mean(speeds)) if speeds else np.nan,
-            final_info=final_info,
-        )
+        row = {
+            "episode": ep,
+            "env_seed": _safe_int(final_info, ENV_SEED_KEYS, default=-1),
+            "return_sum": ep_return,
+            "length": ep_len,
+            "success": _safe_bool(final_info, SUCCESS_KEYS),
+            "crash": _safe_bool(final_info, CRASH_KEYS),
+            "out_of_road": _safe_bool(final_info, OUT_OF_ROAD_KEYS),
+            "max_step": _safe_bool(final_info, MAX_STEP_KEYS),
+            "cost_sum": ep_cost,
+            "route_completion": _safe_float(
+                final_info, ("route_completion",), default=route_completion
+            ),
+            "mean_speed_km_h": float(np.mean(speeds)) if speeds else np.nan,
+            "final_info": final_info,
+        }
         rows.append(row)
-    return pd.DataFrame([asdict(r) for r in rows])
+    return pd.DataFrame(rows)
 
 
-def summarize_metrics(df: pd.DataFrame) -> dict[str, Any]:
+def summarize_metrics(df):
     """Aggregate per-episode metrics into resume/report-ready numbers."""
     if df.empty:
         return {}
@@ -148,7 +137,7 @@ def summarize_metrics(df: pd.DataFrame) -> dict[str, Any]:
     return summary
 
 
-def save_eval_outputs(df: pd.DataFrame, out_dir: str | Path, prefix: str = "eval") -> dict[str, Path]:
+def save_eval_outputs(df, out_dir, prefix="eval"):
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     csv_path = out / f"{prefix}_episodes.csv"
@@ -163,10 +152,10 @@ def save_eval_outputs(df: pd.DataFrame, out_dir: str | Path, prefix: str = "eval
 def evaluate_policy_vecenv(
     model,
     venv,
-    episodes: int,
-    deterministic: bool = True,
-    progress: bool = True,
-) -> pd.DataFrame:
+    episodes,
+    deterministic=True,
+    progress=True,
+):
     """Evaluate a policy in a single-environment SB3 VecEnv.
 
     Use this when observations were normalized during training, because the VecNormalize
@@ -175,7 +164,7 @@ def evaluate_policy_vecenv(
     if getattr(venv, "num_envs", 1) != 1:
         raise ValueError("evaluate_policy_vecenv expects a VecEnv with exactly one environment.")
 
-    rows: list[EpisodeMetrics] = []
+    rows = []
     obs = venv.reset()
     iterator = trange(episodes, desc="Evaluating", disable=not progress)
     for ep in iterator:
@@ -183,9 +172,9 @@ def evaluate_policy_vecenv(
         ep_return = 0.0
         ep_len = 0
         ep_cost = 0.0
-        speeds: list[float] = []
+        speeds = []
         route_completion = 0.0
-        final_info: dict[str, Any] = {}
+        final_info = {}
 
         while not done:
             action, _ = model.predict(obs, deterministic=deterministic)
@@ -210,19 +199,21 @@ def evaluate_policy_vecenv(
             final_info = info
 
         # VecEnv auto-resets after done, so obs is already the next initial observation.
-        row = EpisodeMetrics(
-            episode=ep,
-            env_seed=_safe_int(final_info, ENV_SEED_KEYS, default=-1),
-            return_sum=ep_return,
-            length=ep_len,
-            success=_safe_bool(final_info, SUCCESS_KEYS),
-            crash=_safe_bool(final_info, CRASH_KEYS),
-            out_of_road=_safe_bool(final_info, OUT_OF_ROAD_KEYS),
-            max_step=_safe_bool(final_info, MAX_STEP_KEYS),
-            cost_sum=ep_cost,
-            route_completion=_safe_float(final_info, ("route_completion",), default=route_completion),
-            mean_speed_km_h=float(np.mean(speeds)) if speeds else np.nan,
-            final_info=final_info,
-        )
+        row = {
+            "episode": ep,
+            "env_seed": _safe_int(final_info, ENV_SEED_KEYS, default=-1),
+            "return_sum": ep_return,
+            "length": ep_len,
+            "success": _safe_bool(final_info, SUCCESS_KEYS),
+            "crash": _safe_bool(final_info, CRASH_KEYS),
+            "out_of_road": _safe_bool(final_info, OUT_OF_ROAD_KEYS),
+            "max_step": _safe_bool(final_info, MAX_STEP_KEYS),
+            "cost_sum": ep_cost,
+            "route_completion": _safe_float(
+                final_info, ("route_completion",), default=route_completion
+            ),
+            "mean_speed_km_h": float(np.mean(speeds)) if speeds else np.nan,
+            "final_info": final_info,
+        }
         rows.append(row)
-    return pd.DataFrame([asdict(r) for r in rows])
+    return pd.DataFrame(rows)

@@ -1,16 +1,13 @@
 """MetaDrive environment factories for Stable-Baselines3."""
 
-from __future__ import annotations
-
 import copy
 from pathlib import Path
-from typing import Callable
 
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor, VecNormalize
 
 
-def sanitize_metadrive_config(env_config: dict) -> dict:
+def sanitize_metadrive_config(env_config):
     """Add phase-1 defaults while preserving user-provided config values."""
     cfg = copy.deepcopy(env_config)
     cfg.setdefault("use_render", False)
@@ -23,7 +20,7 @@ def sanitize_metadrive_config(env_config: dict) -> dict:
     return cfg
 
 
-def make_metadrive_env(env_config: dict, seed: int | None = None, monitor_file: str | Path | None = None):
+def make_metadrive_env(env_config, seed=None, monitor_file=None):
     """Create a single MetaDriveEnv instance wrapped with SB3 Monitor."""
     from metadrive.envs import MetaDriveEnv
 
@@ -38,10 +35,12 @@ def make_metadrive_env(env_config: dict, seed: int | None = None, monitor_file: 
             env.action_space.seed(seed)
         except Exception:
             pass
-    return Monitor(env, filename=str(monitor_file) if monitor_file else None, allow_early_resets=True)
+    return Monitor(
+        env, filename=str(monitor_file) if monitor_file else None, allow_early_resets=True
+    )
 
 
-def make_env_fn(env_config: dict, rank: int, seed: int, monitor_dir: str | Path | None = None) -> Callable:
+def make_env_fn(env_config, rank, seed, monitor_dir=None):
     """Return a thunk for DummyVecEnv/SubprocVecEnv."""
 
     def _init():
@@ -55,17 +54,19 @@ def make_env_fn(env_config: dict, rank: int, seed: int, monitor_dir: str | Path 
 
 
 def make_vec_env(
-    env_config: dict,
-    n_envs: int,
-    seed: int,
-    monitor_dir: str | Path,
-    vec_env_type: str = "subproc",
-    normalize_obs: bool = True,
-    normalize_reward: bool = False,
-    training: bool = True,
-) :
+    env_config,
+    n_envs,
+    seed,
+    monitor_dir,
+    vec_env_type="subproc",
+    normalize_obs=True,
+    normalize_reward=False,
+    training=True,
+):
     """Build an SB3 VecEnv for MetaDrive."""
-    env_fns = [make_env_fn(env_config, rank=i, seed=seed, monitor_dir=monitor_dir) for i in range(n_envs)]
+    env_fns = [
+        make_env_fn(env_config, rank=i, seed=seed, monitor_dir=monitor_dir) for i in range(n_envs)
+    ]
     if vec_env_type == "subproc" and n_envs > 1:
         # spawn is safer on macOS and with graphics-related libraries.
         venv = SubprocVecEnv(env_fns, start_method="spawn")

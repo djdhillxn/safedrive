@@ -1,15 +1,12 @@
 """Configuration helpers for YAML experiments."""
 
-from __future__ import annotations
-
 import copy
 from pathlib import Path
-from typing import Any
 
 import yaml
 
 
-def load_yaml(path: str | Path) -> dict[str, Any]:
+def load_yaml(path):
     path = Path(path)
     with path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
@@ -18,14 +15,14 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
     return data
 
 
-def save_yaml(data: dict[str, Any], path: str | Path) -> None:
+def save_yaml(data, path):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, sort_keys=False)
 
 
-def deep_update(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
+def deep_update(base, updates):
     """Recursively update a copy of base with updates."""
     result = copy.deepcopy(base)
     for key, value in updates.items():
@@ -36,7 +33,7 @@ def deep_update(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]
     return result
 
 
-def _parse_scalar(value: str) -> Any:
+def _parse_scalar(value):
     """Parse a CLI override scalar using YAML rules."""
     try:
         return yaml.safe_load(value)
@@ -44,7 +41,7 @@ def _parse_scalar(value: str) -> Any:
         return value
 
 
-def apply_dotlist_overrides(cfg: dict[str, Any], overrides: list[str] | None) -> dict[str, Any]:
+def apply_dotlist_overrides(cfg, overrides):
     """Apply overrides like ['train.total_timesteps=10000', 'metadrive.traffic_density=0.2']."""
     if not overrides:
         return cfg
@@ -63,7 +60,7 @@ def apply_dotlist_overrides(cfg: dict[str, Any], overrides: list[str] | None) ->
     return result
 
 
-def make_eval_metadrive_config(cfg: dict[str, Any]) -> dict[str, Any]:
+def make_eval_metadrive_config(cfg):
     """Merge the main MetaDrive config with eval-specific overrides."""
     env_cfg = copy.deepcopy(cfg.get("metadrive", {}))
     eval_cfg = cfg.get("eval", {})

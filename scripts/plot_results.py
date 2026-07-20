@@ -1,14 +1,12 @@
 """Generate plots from a training run."""
 
-from __future__ import annotations
-
 import argparse
 from pathlib import Path
 
-from saferl_drive.plotting import plot_eval_summary, plot_training_returns
+from saferl_drive.utils import plot_eval_summary, plot_training_returns
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args():
     parser = argparse.ArgumentParser(description="Plot training/evaluation outputs.")
     parser.add_argument("--run-dir", type=str, required=True)
     parser.add_argument("--eval-csv", type=str, default=None)
@@ -16,7 +14,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
+def main():
     args = parse_args()
     run_dir = Path(args.run_dir)
     paths = []
@@ -25,7 +23,9 @@ def main() -> None:
     except Exception as exc:
         print(f"Training-return plot skipped: {exc}")
 
-    eval_csv = Path(args.eval_csv) if args.eval_csv else run_dir / "eval" / "final_unseen_episodes.csv"
+    eval_csv = (
+        Path(args.eval_csv) if args.eval_csv else run_dir / "eval" / "final_unseen_episodes.csv"
+    )
     if eval_csv.exists():
         paths.extend(plot_eval_summary(eval_csv, out_dir=run_dir / "plots"))
     else:

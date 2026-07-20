@@ -1,7 +1,5 @@
 """Record a top-down video of a trained MetaDrive policy."""
 
-from __future__ import annotations
-
 import argparse
 from pathlib import Path
 
@@ -14,7 +12,7 @@ from saferl_drive.config import apply_dotlist_overrides, load_yaml, make_eval_me
 from saferl_drive.envs import make_vec_env
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args():
     parser = argparse.ArgumentParser(description="Record a policy rollout video in MetaDrive.")
     parser.add_argument("--run-dir", type=str, required=True)
     parser.add_argument("--model", type=str, default="final", choices=["final", "best"])
@@ -26,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _to_uint8_frame(frame) -> np.ndarray:
+def _to_uint8_frame(frame):
     arr = np.asarray(frame)
     if arr.dtype != np.uint8:
         if arr.max() <= 1.0:
@@ -39,7 +37,7 @@ def _to_uint8_frame(frame) -> np.ndarray:
     return arr
 
 
-def main() -> None:
+def main():
     args = parse_args()
     run_dir = Path(args.run_dir)
     cfg = load_yaml(run_dir / "resolved_config.yaml")
@@ -47,7 +45,9 @@ def main() -> None:
 
     algo_name = cfg.get("algorithm", {}).get("name", "ppo").lower()
     algo_cls = get_algorithm_class(algo_name)
-    model_path = run_dir / "models" / ("best_model.zip" if args.model == "best" else "final_model.zip")
+    model_path = (
+        run_dir / "models" / ("best_model.zip" if args.model == "best" else "final_model.zip")
+    )
     if not model_path.exists():
         raise FileNotFoundError(f"Model not found: {model_path}")
 
@@ -101,9 +101,15 @@ def main() -> None:
             break
 
     if not frames:
-        raise RuntimeError("No frames were rendered. Try checking your MetaDrive installation/render backend.")
+        raise RuntimeError(
+            "No frames were rendered. Try checking your MetaDrive installation/render backend."
+        )
 
-    output = Path(args.output) if args.output else run_dir / "videos" / f"{algo_name}_{args.model}_topdown.mp4"
+    output = (
+        Path(args.output)
+        if args.output
+        else run_dir / "videos" / f"{algo_name}_{args.model}_topdown.mp4"
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     imageio.mimsave(output, frames, fps=args.fps)
     print(f"Saved video: {output}")

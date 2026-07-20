@@ -5,29 +5,39 @@ Example:
     python -m scripts.train --config configs/sac_mvp.yaml train.total_timesteps=1000000
 """
 
-from __future__ import annotations
-
 import argparse
-from pathlib import Path
 
 from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback, EvalCallback
 from stable_baselines3.common.vec_env import VecNormalize
 
 from saferl_drive.algorithms import build_model
-from saferl_drive.config import apply_dotlist_overrides, load_yaml, make_eval_metadrive_config, save_yaml
+from saferl_drive.config import (
+    apply_dotlist_overrides,
+    load_yaml,
+    make_eval_metadrive_config,
+    save_yaml,
+)
 from saferl_drive.envs import make_vec_env
 from saferl_drive.evaluation import evaluate_policy_vecenv, save_eval_outputs
-from saferl_drive.plotting import plot_eval_summary, plot_training_returns
-from saferl_drive.utils import make_run_dir, set_global_seeds
+from saferl_drive.utils import (
+    make_run_dir,
+    plot_eval_summary,
+    plot_training_returns,
+    set_global_seeds,
+)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args():
     parser = argparse.ArgumentParser(description="Train PPO/SAC on MetaDrive.")
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config.")
     parser.add_argument("--run-name", type=str, default=None, help="Optional run name override.")
-    parser.add_argument("--algo", type=str, choices=["ppo", "sac"], default=None, help="Algorithm override.")
+    parser.add_argument(
+        "--algo", type=str, choices=["ppo", "sac"], default=None, help="Algorithm override."
+    )
     parser.add_argument("--seed", type=int, default=None, help="Seed override.")
-    parser.add_argument("--total-timesteps", type=int, default=None, help="Training steps override.")
+    parser.add_argument(
+        "--total-timesteps", type=int, default=None, help="Training steps override."
+    )
     parser.add_argument("--n-envs", type=int, default=None, help="Number of envs override.")
     parser.add_argument("--vec-env", type=str, choices=["dummy", "subproc"], default=None)
     parser.add_argument(
@@ -38,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
+def main():
     args = parse_args()
     cfg = load_yaml(args.config)
     cfg = apply_dotlist_overrides(cfg, args.overrides)
@@ -94,7 +104,9 @@ def main() -> None:
         training=False,
     )
 
-    tensorboard_log = str(run_dir / "logs" / "tensorboard") if exp_cfg.get("tensorboard", True) else None
+    tensorboard_log = (
+        str(run_dir / "logs" / "tensorboard") if exp_cfg.get("tensorboard", True) else None
+    )
     model = build_model(algo_cfg, env=env, seed=seed, tensorboard_log=tensorboard_log)
 
     callbacks = []

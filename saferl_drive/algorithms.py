@@ -1,13 +1,9 @@
 """Stable-Baselines3 algorithm construction."""
 
-from __future__ import annotations
-
-from typing import Any
-
 from stable_baselines3 import PPO, SAC
 
 
-def get_algorithm_class(name: str):
+def get_algorithm_class(name):
     name = name.lower()
     if name == "ppo":
         return PPO
@@ -16,7 +12,7 @@ def get_algorithm_class(name: str):
     raise ValueError(f"Unsupported algorithm {name!r}. Phase 1 supports: ppo, sac.")
 
 
-def build_model(algo_cfg: dict[str, Any], env, seed: int, tensorboard_log: str | None = None):
+def build_model(algo_cfg, env, seed, tensorboard_log=None):
     """Instantiate a PPO/SAC model from YAML config."""
     algo_name = algo_cfg.get("name", "ppo").lower()
     policy = algo_cfg.get("policy", "MlpPolicy")
