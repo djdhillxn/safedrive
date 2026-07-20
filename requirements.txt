@@ -1,0 +1,12 @@
+metadrive>=0.4.0
+stable-baselines3[extra]>=2.3.0
+sb3-contrib>=2.3.0
+gymnasium>=0.29.1
+numpy>=1.24
+pandas>=2.0
+pyyaml>=6.0
+matplotlib>=3.7
+tqdm>=4.66
+imageio>=2.31
+imageio-ffmpeg>=0.4.9
+rich>=13.0

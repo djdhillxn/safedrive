@@ -1,0 +1,49 @@
+# Tiny config to check installation and script wiring quickly.
+experiment:
+  name: smoke_test
+  output_dir: runs
+  seed: 0
+  tensorboard: false
+
+train:
+  total_timesteps: 2000
+  n_envs: 1
+  vec_env: dummy
+  normalize_obs: true
+  normalize_reward: false
+  checkpoint_freq: 1000
+  eval_freq: 1000
+  eval_episodes: 2
+
+algorithm:
+  name: ppo
+  policy: MlpPolicy
+  kwargs:
+    learning_rate: 0.0003
+    n_steps: 256
+    batch_size: 64
+    n_epochs: 2
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_range: 0.2
+    verbose: 1
+
+metadrive:
+  use_render: false
+  log_level: 50
+  map: 3
+  num_scenarios: 2
+  start_seed: 0
+  traffic_density: 0.0
+  random_traffic: false
+  random_spawn_lane_index: false
+  horizon: 300
+  discrete_action: false
+  accident_prob: 0.0
+
+eval:
+  start_seed: 100
+  num_scenarios: 2
+  traffic_density: 0.0
+  episodes: 2
+  deterministic: true

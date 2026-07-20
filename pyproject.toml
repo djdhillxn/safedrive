@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "saferl-drive-metadrive-mvp"
+version = "0.1.0"
+description = "Phase-1 MetaDrive autonomous-driving MVP with PPO/SAC, evaluation metrics, plots, and videos."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Luvya"}]
+dependencies = [
+    "metadrive>=0.4.0",
+    "stable-baselines3[extra]>=2.3.0",
+    "sb3-contrib>=2.3.0",
+    "gymnasium>=0.29.1",
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "pyyaml>=6.0",
+    "matplotlib>=3.7",
+    "tqdm>=4.66",
+    "imageio>=2.31",
+    "imageio-ffmpeg>=0.4.9",
+    "rich>=13.0",
+]
+
+[tool.setuptools]
+packages = ["saferl_drive"]
+
+[tool.ruff]
+line-length = 100
