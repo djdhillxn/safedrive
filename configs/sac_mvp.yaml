@@ -21,6 +21,8 @@ algorithm:
   name: sac
   policy: MlpPolicy
   kwargs:
+    # Use CUDA in Colab when available, with an automatic CPU fallback.
+    device: auto
     learning_rate: 0.0003
     buffer_size: 300000
     learning_starts: 10000

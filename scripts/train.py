@@ -190,11 +190,35 @@ def main():
         if experiment.get("tensorboard", True):
             tensorboard_log = str(run_dir / "logs" / "tensorboard")
         model = build_model(algorithm, env=train_env, seed=seed, tensorboard_log=tensorboard_log)
+        model_device = str(model.device)
+        metadata["training"]["model_device"] = model_device
+        logger.info("%s policy device: %s", algorithm_name.upper(), model_device)
+        environment_count = max(int(training.get("n_envs", 1)), 1)
+        if algorithm_name == "ppo":
+            ppo_kwargs = algorithm.get("kwargs", {})
+            rollout_size = int(ppo_kwargs.get("n_steps", 2048)) * environment_count
+            batch_size = int(ppo_kwargs.get("batch_size", 64))
+            minibatches = (rollout_size + batch_size - 1) // batch_size
+            metadata["training"].update(
+                {
+                    "rollout_size": rollout_size,
+                    "batch_size": batch_size,
+                    "minibatches_per_epoch": minibatches,
+                }
+            )
+            logger.info(
+                "PPO workload: %s environments x %s steps = %s samples; "
+                "%s minibatches of up to %s samples per epoch.",
+                environment_count,
+                int(ppo_kwargs.get("n_steps", 2048)),
+                rollout_size,
+                minibatches,
+                batch_size,
+            )
         logger.debug("Model: %s", model)
 
         callbacks = []
         checkpoint_frequency = int(training.get("checkpoint_freq", 100_000))
-        environment_count = max(int(training.get("n_envs", 1)), 1)
         if checkpoint_frequency > 0:
             callbacks.append(
                 CheckpointCallback(

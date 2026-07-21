@@ -21,6 +21,7 @@ algorithm:
   name: ppo
   policy: MlpPolicy
   kwargs:
+    device: cpu
     learning_rate: 0.0003
     n_steps: 128
     batch_size: 64

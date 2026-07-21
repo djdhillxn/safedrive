@@ -157,6 +157,19 @@ runs in a separate subprocess even when PPO, SAC, or the smoke test uses one tra
 environment. Do not configure more than one MetaDrive environment with `DummyVecEnv`; use
 `subproc` or set `n_envs: 1`.
 
+The PPO configuration explicitly keeps its MLP policy on CPU and collects experience in
+four MetaDrive subprocesses. Each update receives 8,192 samples and uses batches of 512,
+which increases each batch's memory use while reducing optimizer-loop overhead. More
+workers are not automatically better: keep `n_envs` at or below the Colab runtime's
+logical CPU count and leave capacity for the learner and evaluation subprocess.
+
+SAC keeps `device: auto`. On a GPU Colab runtime this selects CUDA; on a machine without
+CUDA it falls back to CPU. SAC performs actor and critic gradient updates after experience
+collection, so the GPU is more useful than it is for PPO's small MLP. The selected device
+is printed at startup and saved in `run_metadata.json`. To compare SAC wall-clock speed on
+a particular runtime, run a short trial with `algorithm.kwargs.device=cpu`; GPU speedups
+are workload-dependent.
+
 Evaluate a trained best model:
 
 ```bash

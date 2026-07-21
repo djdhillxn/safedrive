@@ -21,9 +21,14 @@ algorithm:
   name: ppo
   policy: MlpPolicy
   kwargs:
+    # SB3 recommends CPU for PPO with an MLP. MetaDrive collection still uses
+    # the four subprocess workers configured above.
+    device: cpu
     learning_rate: 0.0003
     n_steps: 2048
-    batch_size: 256
+    # 4 environments x 2,048 steps = 8,192 samples per rollout. A batch of
+    # 512 divides that evenly and halves optimizer batches versus 256.
+    batch_size: 512
     n_epochs: 10
     gamma: 0.99
     gae_lambda: 0.95
