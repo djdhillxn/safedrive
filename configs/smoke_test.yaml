@@ -50,6 +50,7 @@ eval:
   episodes: 2
   deterministic: true
   progress: true
+  vec_env: subproc
 
 logging:
   console_level: INFO

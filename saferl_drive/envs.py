@@ -67,10 +67,16 @@ def make_vec_env(
     env_fns = [
         make_env_fn(env_config, rank=i, seed=seed, monitor_dir=monitor_dir) for i in range(n_envs)
     ]
-    if vec_env_type == "subproc" and n_envs > 1:
-        # spawn is safer on macOS and with graphics-related libraries.
+    if vec_env_type == "subproc":
+        # MetaDrive has one global engine per process. A subprocess is therefore
+        # required even for one environment when another environment is active.
         venv = SubprocVecEnv(env_fns, start_method="spawn")
-    elif vec_env_type == "dummy" or n_envs == 1:
+    elif vec_env_type == "dummy":
+        if n_envs > 1:
+            raise ValueError(
+                "MetaDrive DummyVecEnv supports only one environment because its engine "
+                "is process-global. Use vec_env_type='subproc' or set n_envs=1."
+            )
         venv = DummyVecEnv(env_fns)
     else:
         raise ValueError(f"Unknown vec_env_type={vec_env_type!r}; expected 'dummy' or 'subproc'.")
@@ -84,3 +90,16 @@ def make_vec_env(
             clip_obs=10.0,
         )
     return venv
+
+
+def find_vecnormalize_path(run_dir, model_name):
+    """Find normalization statistics matching the selected model when available."""
+    run_dir = Path(run_dir)
+    candidates = []
+    if model_name == "best":
+        candidates.append(run_dir / "models" / "best_vecnormalize.pkl")
+    candidates.append(run_dir / "models" / "vecnormalize.pkl")
+    for path in candidates:
+        if path.exists():
+            return path
+    return None

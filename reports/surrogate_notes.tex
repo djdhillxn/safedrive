@@ -80,10 +80,19 @@ Record the following from each long run's \texttt{logs/train.log} and
 
 \section{Observed results}
 \begin{itemize}
-  \item IDM summary: TODO
-  \item PPO best-model summary: TODO
+  \item Initial IDM run (50 unseen episodes, original reward config): 42\% success,
+        40\% collision, 16\% off-road, 68.2\% mean route completion, and 27.0 km/h
+        mean speed.
+  \item Initial PPO final model (500,000 steps, original reward config): 2\% success,
+        40\% collision, 60\% off-road, 27.1\% mean route completion, and 31.5 km/h
+        mean speed. Its mean episode length was 195 steps versus IDM's 526, consistent
+        with a faster policy terminating early through collisions or road departure.
+  \item PPO best-model summary: TODO after explicit best-model evaluation.
   \item SAC best-model summary: TODO
-  \item Comparison interpretation: TODO
+  \item Initial interpretation: the original reward used weak terminal penalties and no
+        lateral lane-centering factor. This could reward rapid forward progress before a
+        failure. The revised config aligns terminal and lane-keeping incentives more closely
+        with the reported safety metrics.
   \item Representative video observations: TODO
 \end{itemize}
 
@@ -93,6 +102,9 @@ Record the following from each long run's \texttt{logs/train.log} and
   \item Colab may include the obsolete \texttt{gym} distribution. The notebooks remove it
         before installing SafeDrive, which uses Gymnasium.
   \item Evaluation must reset within the configured unseen seed range beginning at 1000.
+  \item The initial smoke and SAC runs failed because training and callback evaluation both
+        created MetaDrive's process-global engine in one Python process. Callback evaluation
+        now uses a one-worker \texttt{SubprocVecEnv}.
   \item Treat \texttt{/content/safedrive} as the live checkout. Mounted Drive is only for
         persistent artifacts because many small Drive-backed file operations are slow.
   \item Add dated notes and complete exception messages here; detailed stack traces remain

@@ -152,6 +152,11 @@ The successful runs update `runs/latest_idm.txt`, `runs/latest_ppo.txt`, and
 `runs/latest_sac.txt`. The smoke test uses `runs/latest_smoke.txt`, so it cannot replace the
 latest report-quality PPO pointer.
 
+MetaDrive owns one process-global simulation engine. During training, callback evaluation
+runs in a separate subprocess even when PPO, SAC, or the smoke test uses one training
+environment. Do not configure more than one MetaDrive environment with `DummyVecEnv`; use
+`subproc` or set `n_envs: 1`.
+
 Evaluate a trained best model:
 
 ```bash
@@ -172,6 +177,39 @@ python -m scripts.record_video \
   --model best \
   --steps 1000
 ```
+
+The Colab helper `restore_run_from_drive("<run-directory>", "ppo")` restores an existing
+PPO run from Drive and recreates its latest-run pointer. Use `"sac"` for a SAC run. This
+allows best-model evaluation or video recording in a new runtime without retraining.
+
+## Interpreting a weak PPO result
+
+The smoke test is intentionally easier than the Phase-1 benchmark: it has no traffic, two
+simple scenarios, and only checks wiring. It is not a performance baseline. Compare PPO
+with IDM on the same unseen seeds instead.
+
+Always evaluate `best_model.zip` before judging a completed run. The final PPO update can
+be worse than an earlier checkpoint. New runs save `best_vecnormalize.pkl` beside the best
+model so that checkpoint is evaluated with the matching observation statistics. Older
+runs fall back to final normalization statistics with a warning.
+
+To distinguish poor learning from poor generalization, evaluate the same model on its
+training seed range under a separate prefix:
+
+```bash
+python -m scripts.evaluate \
+  --run-dir runs/<ppo-run> \
+  --model best \
+  --episodes 50 \
+  --prefix best_train_seeds \
+  eval.start_seed=0 \
+  eval.num_scenarios=50
+```
+
+High training-seed success with low unseen success indicates overfitting. Low success on
+both ranges indicates an optimization or reward problem. The Phase-1 configs now enable
+lane-centered progress, strengthen success and safety terminal rewards, reduce the pure
+speed incentive, and use a larger PPO policy network.
 
 Manual summary comparison is still supported:
 
@@ -205,6 +243,7 @@ run_dir/
 │   ├── final_model.zip
 │   ├── best_model.zip               # when EvalCallback runs
 │   ├── vecnormalize.pkl
+│   ├── best_vecnormalize.pkl         # statistics captured with best_model.zip
 │   └── replay_buffer.pkl             # SAC
 ├── checkpoints/
 ├── eval/

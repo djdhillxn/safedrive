@@ -9,7 +9,7 @@ from stable_baselines3.common.vec_env import VecNormalize
 
 from saferl_drive.algorithms import get_algorithm_class
 from saferl_drive.config import apply_dotlist_overrides, load_yaml, make_eval_metadrive_config
-from saferl_drive.envs import make_vec_env
+from saferl_drive.envs import find_vecnormalize_path, make_vec_env
 from saferl_drive.utils import log_system_info, setup_logging
 
 
@@ -84,12 +84,17 @@ def main():
             training=False,
         )
         environment = base_env
-        vecnormalize_path = run_dir / "models" / "vecnormalize.pkl"
-        if vecnormalize_path.exists():
+        vecnormalize_path = find_vecnormalize_path(run_dir, selected_model)
+        if vecnormalize_path is not None:
             environment = VecNormalize.load(vecnormalize_path, base_env)
             environment.training = False
             environment.norm_reward = False
             logger.debug("Loaded VecNormalize statistics: %s", vecnormalize_path)
+            if selected_model == "best" and vecnormalize_path.name != "best_vecnormalize.pkl":
+                logger.warning(
+                    "This older run has no best-model normalization snapshot; using the "
+                    "final normalization statistics."
+                )
 
         logger.info("Loading %s model: %s", selected_model, model_path)
         model = algorithm_class.load(model_path, env=environment)

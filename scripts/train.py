@@ -8,7 +8,12 @@ Examples:
 import argparse
 import sys
 
-from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback, EvalCallback
+from stable_baselines3.common.callbacks import (
+    BaseCallback,
+    CallbackList,
+    CheckpointCallback,
+    EvalCallback,
+)
 from stable_baselines3.common.vec_env import VecNormalize
 
 from saferl_drive.algorithms import build_model
@@ -59,6 +64,20 @@ def _close_env(environment, logger):
     except Exception:
         if logger is not None:
             logger.debug("Environment close failed.", exc_info=True)
+
+
+class _SaveBestVecNormalizeCallback(BaseCallback):
+    """Save observation statistics at the same moment as a new best model."""
+
+    def __init__(self, save_path):
+        super().__init__(verbose=0)
+        self.save_path = save_path
+
+    def _on_step(self):
+        vecnormalize = self.model.get_vec_normalize_env()
+        if vecnormalize is not None:
+            vecnormalize.save(self.save_path)
+        return True
 
 
 def main():
@@ -119,6 +138,7 @@ def main():
             "episodes": int(evaluation.get("episodes", 50)),
             "start_seed": int(evaluation.get("start_seed", 1000)),
             "num_scenarios": int(evaluation.get("num_scenarios", 50)),
+            "vec_env": evaluation.get("vec_env", "subproc"),
         },
         "outputs": {},
     }
@@ -146,12 +166,21 @@ def main():
 
         eval_config = make_eval_metadrive_config(config)
         eval_start_seed = int(evaluation.get("start_seed", 1000))
+        eval_vec_env_type = evaluation.get("vec_env", "subproc")
+        if training.get("vec_env", "dummy") == "dummy" and eval_vec_env_type == "dummy":
+            logger.warning(
+                "Training already uses the in-process MetaDrive engine; forcing callback "
+                "evaluation into a subprocess."
+            )
+            eval_vec_env_type = "subproc"
+        metadata["evaluation"]["vec_env"] = eval_vec_env_type
+        logger.debug("Callback evaluation VecEnv: %s", eval_vec_env_type)
         eval_env = make_vec_env(
             env_config=eval_config,
             n_envs=1,
             seed=eval_start_seed,
             monitor_dir=run_dir / "logs" / "eval_monitor",
-            vec_env_type="dummy",
+            vec_env_type=eval_vec_env_type,
             normalize_obs=bool(training.get("normalize_obs", True)),
             normalize_reward=bool(training.get("normalize_reward", False)),
             training=False,
@@ -179,9 +208,13 @@ def main():
 
         evaluation_frequency = int(training.get("eval_freq", 50_000))
         if evaluation_frequency > 0:
+            best_vecnormalize_callback = _SaveBestVecNormalizeCallback(
+                run_dir / "models" / "best_vecnormalize.pkl"
+            )
             callbacks.append(
                 EvalCallback(
                     eval_env,
+                    callback_on_new_best=best_vecnormalize_callback,
                     best_model_save_path=str(run_dir / "models"),
                     log_path=str(run_dir / "eval" / "sb3_eval"),
                     eval_freq=max(evaluation_frequency // environment_count, 1),
@@ -212,6 +245,11 @@ def main():
             train_env.save(vecnormalize_path)
             metadata["outputs"]["vecnormalize"] = str(vecnormalize_path)
             logger.debug("Saved VecNormalize statistics: %s", vecnormalize_path)
+
+        best_vecnormalize_path = run_dir / "models" / "best_vecnormalize.pkl"
+        if best_vecnormalize_path.exists():
+            metadata["outputs"]["best_vecnormalize"] = str(best_vecnormalize_path)
+            logger.debug("Saved best-model VecNormalize statistics: %s", best_vecnormalize_path)
 
         if algorithm_name == "sac" and hasattr(model, "save_replay_buffer"):
             replay_path = run_dir / "models" / "replay_buffer.pkl"
