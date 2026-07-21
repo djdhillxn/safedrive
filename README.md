@@ -121,9 +121,22 @@ python -m scripts.sync_drive_runs \
 
 The operation is one-way from Drive to the repository. It merges completed and failed run
 artifacts, skips experiments still marked `running`, preserves local-only files, copies
-top-level comparison artifacts, and rebuilds the `latest_*.txt` pointers. Use `--dry-run`
-to preview a sync. The same command powers Section 4.1 of the Colab notebook, where its
-destination is the temporary `/content/safedrive/runs` folder rather than this Mac.
+top-level comparison artifacts, and rebuilds the `latest_*.txt` pointers. The Mac default
+is analysis-only: it keeps resolved configs, metadata, evaluation CSV/JSON, logs,
+TensorBoard traces, plots, and videos, but does not even traverse Drive's `models/` or
+`checkpoints/` directories. Model archives, checkpoint archives, and replay-buffer pickle
+files therefore remain in Drive.
+
+Use `--dry-run` to preview a sync. To remove training artifacts downloaded by an older
+version of the script without changing Google Drive, run:
+
+```bash
+python -m scripts.sync_drive_runs --prune-local-training-artifacts
+```
+
+Section 4.1 of the Colab notebook passes `--include-training-artifacts` because the Colab
+checkout needs models and checkpoints for evaluation, video recording, and possible run
+continuation. That full mode should normally not be used on the Mac.
 
 Notebook run order:
 
