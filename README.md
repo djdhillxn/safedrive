@@ -33,6 +33,7 @@ safedrive/
 │   ├── train.py
 │   ├── evaluate.py
 │   ├── evaluate_baseline.py
+│   ├── sync_drive_runs.py
 │   ├── record_video.py
 │   ├── plot_results.py
 │   └── compare_runs.py
@@ -99,6 +100,30 @@ VS Code --git push--> GitHub --clone/pull--> /content/safedrive
 GitHub and `/content/safedrive` are the source of truth for code. Do not run the repository
 directly from mounted Drive; Drive is slower for many small files and is used only to back
 up completed run directories, comparison outputs, and reports.
+
+### Pulling Drive runs onto a Mac
+
+With Google Drive for desktop running, pull persistent artifacts into this repository's
+root `runs/` folder with:
+
+```bash
+python -m scripts.sync_drive_runs
+```
+
+On macOS the script auto-detects a single
+`~/Library/CloudStorage/GoogleDrive-*/My Drive/SafeDrive` folder. The location can also be
+provided explicitly:
+
+```bash
+python -m scripts.sync_drive_runs \
+  --drive-project "/Users/dhillo/Library/CloudStorage/GoogleDrive-dhillondheeraj84@gmail.com/My Drive/SafeDrive"
+```
+
+The operation is one-way from Drive to the repository. It merges completed and failed run
+artifacts, skips experiments still marked `running`, preserves local-only files, copies
+top-level comparison artifacts, and rebuilds the `latest_*.txt` pointers. Use `--dry-run`
+to preview a sync. The same command powers Section 4.1 of the Colab notebook, where its
+destination is the temporary `/content/safedrive/runs` folder rather than this Mac.
 
 Notebook run order:
 
