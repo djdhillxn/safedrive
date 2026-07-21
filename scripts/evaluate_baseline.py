@@ -1,4 +1,4 @@
-"""Evaluate MetaDrive's rule-based IDMPolicy on a configured scenario split."""
+"""Evaluate MetaDrive's IDM or expert controller on a configured split."""
 
 import argparse
 import sys
@@ -26,15 +26,16 @@ from saferl_drive.utils import (
 
 
 class _DummyActionPolicy:
-    """Supply a valid action while MetaDrive's IDMPolicy controls the ego vehicle."""
+    """Supply a valid action while MetaDrive's internal policy controls the vehicle."""
 
     def predict(self, observation, deterministic=True):
         return [[0.0, 0.0]], None
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Evaluate the MetaDrive IDM baseline.")
+    parser = argparse.ArgumentParser(description="Evaluate a built-in MetaDrive policy.")
     parser.add_argument("--config", required=True, help="PPO or SAC config defining evaluation.")
+    parser.add_argument("--policy", default="idm", choices=["idm", "expert"])
     parser.add_argument("--split", default="test", choices=["validation", "test"])
     parser.add_argument("--episodes", type=int, default=None)
     parser.add_argument("--prefix", default=None)
@@ -54,14 +55,16 @@ def main():
 
     experiment = config.get("experiment", {})
     evaluation = get_evaluation_config(config, args.split)
-    prefix = args.prefix or f"idm_{args.split}"
+    policy_class_name = "IDMPolicy" if args.policy == "idm" else "ExpertPolicy"
+    run_name = f"{args.policy}_baseline"
+    prefix = args.prefix or f"{args.policy}_{args.split}"
     episode_count = int(args.episodes or evaluation.get("episodes", 50))
     logging_config = config.get("logging", {})
     output_dir = experiment.get("output_dir", "runs")
     seed = int(experiment.get("seed", 0))
-    run_dir = make_run_dir(output_dir, "idm_baseline", None, seed)
+    run_dir = make_run_dir(output_dir, run_name, None, seed)
     logger = setup_logging(
-        run_dir / "logs" / "idm_baseline.log",
+        run_dir / "logs" / f"{args.policy}_baseline.log",
         console_level=logging_config.get("console_level", "INFO"),
         file_level=logging_config.get("file_level", "DEBUG"),
     )
@@ -74,7 +77,7 @@ def main():
         "arguments": vars(args),
         "config_path": str(args.config),
         "run_dir": str(run_dir),
-        "algorithm": "IDMPolicy",
+        "algorithm": policy_class_name,
         "seed": seed,
         "evaluation": {
             "episodes": episode_count,
@@ -95,14 +98,15 @@ def main():
         logger.debug("Resolved source config: %s", config)
 
         environment_config = make_eval_metadrive_config(config, args.split)
-        # The worker converts this serializable marker into IDMPolicy. Importing
-        # MetaDrive in the parent can leave native Panda3D state alive at exit.
-        environment_config["_safedrive_agent_policy"] = "IDMPolicy"
+        # The worker converts this serializable marker into the requested native
+        # policy. Importing MetaDrive in the parent can leave Panda3D state alive.
+        environment_config["_safedrive_agent_policy"] = policy_class_name
         environment_config["manual_control"] = False
         start_seed = int(evaluation.get("start_seed", 1000))
         set_global_seeds(start_seed)
         logger.info(
-            "Evaluating IDMPolicy for %s episodes on the %s split beginning at seed %s.",
+            "Evaluating %s for %s episodes on the %s split beginning at seed %s.",
+            policy_class_name,
             episode_count,
             args.split,
             start_seed,
@@ -116,7 +120,7 @@ def main():
             env_config=environment_config,
             n_envs=1,
             seed=start_seed,
-            monitor_dir=run_dir / "logs" / "idm_monitor",
+            monitor_dir=run_dir / "logs" / f"{args.policy}_monitor",
             vec_env_type=evaluation.get("vec_env", "subproc"),
             normalize_obs=False,
             normalize_reward=False,
@@ -145,7 +149,7 @@ def main():
                 env_config=environment_config,
                 n_envs=1,
                 seed=start_seed,
-                monitor_dir=run_dir / "logs" / "idm_monitor_repeat",
+                monitor_dir=run_dir / "logs" / f"{args.policy}_monitor_repeat",
                 vec_env_type=evaluation.get("vec_env", "subproc"),
                 normalize_obs=False,
                 normalize_reward=False,
@@ -182,7 +186,7 @@ def main():
                 )
             except AssertionError as error:
                 raise RuntimeError(
-                    "Reproducibility gate failed: repeated IDM outcomes changed."
+                    "Reproducibility gate failed: repeated policy outcomes changed."
                 ) from error
 
             first_summary = summarize_metrics(frame)
@@ -246,22 +250,22 @@ def main():
         metadata["status"] = "complete"
         metadata["completed_at_utc"] = utc_timestamp()
         if args.split == "test":
-            pointer = update_latest_run_file(output_dir, "idm", run_dir)
+            pointer = update_latest_run_file(output_dir, args.policy, run_dir)
             metadata["outputs"]["latest_pointer"] = str(pointer)
         write_json(metadata, metadata_path)
         if args.split == "test":
             manifest = append_phase1_manifest(
                 output_dir,
                 {
-                    "kind": "idm",
-                    "algorithm": "IDMPolicy",
+                    "kind": args.policy,
+                    "algorithm": policy_class_name,
                     "status": "complete",
                     "run_dir": str(run_dir),
                     "summary": str(paths["summary_json"]),
                 },
             )
             logger.debug("Updated latest pointer %s and manifest %s", pointer, manifest)
-        logger.info("IDM baseline complete: %s", paths["summary_json"])
+        logger.info("%s baseline complete: %s", policy_class_name, paths["summary_json"])
     except Exception as error:
         metadata["status"] = "failed"
         metadata["failed_at_utc"] = utc_timestamp()
@@ -271,8 +275,8 @@ def main():
             append_phase1_manifest(
                 output_dir,
                 {
-                    "kind": "idm",
-                    "algorithm": "IDMPolicy",
+                    "kind": args.policy,
+                    "algorithm": policy_class_name,
                     "status": "failed",
                     "run_dir": str(run_dir),
                     "error": str(error),

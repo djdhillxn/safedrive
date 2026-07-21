@@ -61,23 +61,28 @@ Run only this limited matrix, in order:
 
 1. **Smoke test** — verify MetaDrive, Stable-Baselines3, training, evaluation, plotting,
    and artifact creation with `configs/smoke_test.yaml`. This is not a report result.
-2. **Reproducibility gate** — repeat IDM over the same 10 fixed validation trials and
-   require identical categorical outcomes and near-identical aggregate metrics.
-3. **PPO** — train one continuous-control vector-observation run for 500,000 timesteps
+2. **Native-policy gates** — require the expert to succeed on at least 80% of 10 fixed
+   validation trials, then repeat IDM and require reproducible outcomes.
+3. **Control pilots** — run PPO and SAC for 100,000 steps without traffic. Each must reach
+   at least 10% validation success and 50% route completion before a full run is allowed.
+4. **PPO** — train one continuous-control vector-observation run for 500,000 timesteps
    using four subprocess environments.
-4. **SAC** — train one comparable run for 500,000 timesteps using one environment.
-5. **Held-out evaluation** — after both learned configurations are frozen, evaluate IDM
+5. **SAC** — train one comparable run for 500,000 timesteps using one environment.
+6. **Held-out evaluation** — after both learned configurations are frozen, evaluate IDM
    and each frozen validation winner once on 100 held-out test scenarios.
-6. **Videos** — record one top-down best-model rollout for PPO and one for SAC.
-7. **Final comparison** — compare IDM, PPO, and SAC and write the Phase-1 CSV, JSON, and
+7. **Videos** — record one top-down best-model rollout for PPO and one for SAC.
+8. **Final comparison** — compare IDM, PPO, and SAC and write the Phase-1 CSV, JSON, and
    plot.
-8. **Report generation** — fill the result placeholders and compile the LaTeX report.
+9. **Report generation** — fill the result placeholders and compile the LaTeX report.
 
 Training scenarios begin at seed 0. Fixed validation scenarios begin at seed 1000 and are
-used for checkpoint selection. The reported test scenarios begin at seed 2000 and are not
-consulted until the checkpoint is frozen. Validation and test traffic generation is
-deterministic, while training keeps randomized traffic for diversity. Phase 1 intentionally
-has one training run for PPO and one for SAC; it does not run seed sweeps.
+used for checkpoint selection. The reported test scenarios begin at seed 3000 and are not
+consulted until the checkpoint is frozen. Seeds 2000--2099 were inspected during the July
+diagnosis and are no longer considered held out. Validation and test traffic generation is
+deterministic, while full training keeps randomized traffic for diversity. Phase 1 uses a
+three-block road and traffic density 0.05 as a deliberately learnable control benchmark;
+harder maps and traffic are difficulty extensions, not prerequisites for proving the
+training pipeline works.
 
 ## Google Colab driver notebook
 
@@ -103,14 +108,14 @@ Notebook run order:
 4. Clone or fast-forward pull the public GitHub repository.
 5. Remove legacy Gym and install the repository with `pip install -e .`.
 6. Run the smoke test.
-7. Run the deterministic IDM reproducibility gate.
-8. Run PPO and copy it to Drive.
-9. Run SAC and copy it to Drive.
-10. Run the IDM, best PPO, and best SAC held-out tests and copy them to Drive.
-11. Record one video for each learned agent.
-12. Build and display the Phase-1 comparison.
-13. Compile the report if `latexmk` is available.
-14. Perform the final `runs/` and `reports/` sync to Drive.
+7. Run the expert task-sanity and deterministic IDM reproducibility gates.
+8. Run both short learning gates and copy their artifacts to Drive.
+9. Run gated PPO and copy it to Drive.
+10. Run gated SAC and copy it to Drive.
+11. Run the IDM, best PPO, and best SAC held-out tests and copy them to Drive.
+12. Record one video for each learned agent.
+13. Build and display the Phase-1 comparison.
+14. Compile the report if `latexmk` is available, then perform the final artifact sync.
 
 The long experiment sections are independent. In a later Colab session, rerun the setup
 sections and then continue from the required experiment. `FULL_TIMESTEPS` defaults to
@@ -137,8 +142,27 @@ python -m scripts.evaluate_baseline \
   --verify-repeat
 ```
 
-Train PPO and SAC. Training selects and freezes a validation winner but deliberately does
-not inspect the held-out test split:
+Before a full run, execute the 100,000-step no-traffic control pilots used by the Colab
+notebook. They use separate latest pointers, so they cannot replace report-quality runs:
+
+```bash
+python -m scripts.train --config configs/ppo_mvp.yaml --run-name ppo_control_pilot \
+  experiment.latest_name=ppo_pilot train.total_timesteps=100000 \
+  train.checkpoint_freq=25000 train.eval_freq=25000 validation.episodes=20 \
+  metadrive.traffic_density=0.0 metadrive.random_traffic=false \
+  validation.traffic_density=0.0
+
+python -m scripts.train --config configs/sac_mvp.yaml --run-name sac_control_pilot \
+  experiment.latest_name=sac_pilot train.total_timesteps=100000 \
+  train.checkpoint_freq=25000 train.eval_freq=25000 validation.episodes=20 \
+  metadrive.traffic_density=0.0 metadrive.random_traffic=false \
+  validation.traffic_density=0.0
+```
+
+The notebook enforces the numerical gates. If either pilot fails, stop and inspect its
+validation history and `training_diagnostics.json`; do not launch the corresponding full
+run. Once both pass, training selects and freezes a validation winner without inspecting
+the held-out test split:
 
 ```bash
 python -m scripts.train --config configs/ppo_mvp.yaml
@@ -163,8 +187,8 @@ environment. Do not configure more than one MetaDrive environment with `DummyVec
 `subproc` or set `n_envs: 1`.
 
 The PPO configuration explicitly keeps its MLP policy on CPU and collects experience in
-four MetaDrive subprocesses. Each update receives 8,192 samples and uses batches of 512,
-which increases each batch's memory use while reducing optimizer-loop overhead. More
+four MetaDrive subprocesses. Each update receives 4,096 samples and uses batches of 256,
+giving more frequent updates while retaining 16 minibatches per epoch. More
 workers are not automatically better: keep `n_envs` at or below the Colab runtime's
 logical CPU count and leave capacity for the learner and evaluation subprocess.
 
@@ -173,7 +197,16 @@ CUDA it falls back to CPU. SAC performs actor and critic gradient updates after 
 collection, so the GPU is more useful than it is for PPO's small MLP. The selected device
 is printed at startup and saved in `run_metadata.json`. To compare SAC wall-clock speed on
 a particular runtime, run a short trial with `algorithm.kwargs.device=cpu`; GPU speedups
-are workload-dependent.
+are workload-dependent. The corrected SAC setup also reduces the learning rate, uses a
+larger replay buffer and batch, and fixes the entropy coefficient at 0.05 because the prior
+automatic coefficient and critic grew without bound together.
+
+MetaDrive's vector observation is already bounded in `[0, 1]`, so the current configs do
+not add `VecNormalize` observation statistics. A SafeDrive reward wrapper makes the
+reported objective explicit: slow driving, lateral lane deviation, unstable steering, and timeout are penalized;
+terminal success and safety outcomes dominate dense progress. `truncate_as_terminate` is
+enabled because a horizon timeout is a task failure, not a state from which the value
+function should bootstrap.
 
 After both learned configurations are frozen, run the IDM test and evaluate each trained
 best model on the same held-out split:
@@ -201,7 +234,7 @@ to final automatically with a warning:
 python -m scripts.record_video \
   --run-dir runs/<ppo-run> \
   --model best \
-  --seed 2007 \
+  --seed 3007 \
   --steps 1000
 ```
 
@@ -231,9 +264,10 @@ python -m scripts.evaluate \
 ```
 
 High training-seed success with low validation success indicates overfitting. Low success on
-both ranges indicates an optimization or reward problem. The Phase-1 configs now enable
-lane-centered progress, strengthen success and safety terminal rewards, reduce the pure
-speed incentive, and use a larger PPO policy network.
+both ranges indicates an optimization, reward, termination, or task-difficulty problem. The
+Phase-1 configs now use a learnable three-block road, align terminal and timeout incentives
+with the reported metrics, reduce the pure progress incentive, penalize unstable control,
+and use a larger policy network.
 
 Manual summary comparison is still supported:
 
@@ -267,8 +301,8 @@ run_dir/
 ├── models/
 │   ├── final_model.zip
 │   ├── best_model.zip               # success-first validation winner
-│   ├── vecnormalize.pkl
-│   ├── best_vecnormalize.pkl         # statistics captured with best_model.zip
+│   ├── vecnormalize.pkl              # only when normalization is enabled
+│   ├── best_vecnormalize.pkl         # only when normalization is enabled
 │   └── replay_buffer.pkl             # SAC
 ├── checkpoints/
 ├── eval/
@@ -305,9 +339,10 @@ live in each operation's log file.
 
 ## Metrics
 
-Per-episode CSV files include the episode number, scenario seed, return, length, success,
-collision, off-road, timeout, cumulative cost, route completion, mean speed, and serialized
-final MetaDrive `info` data.
+Per-episode CSV files include the episode number, scenario seed, shaped and base return,
+reward-shaping penalty, length, success, collision, off-road, timeout, cumulative cost,
+route completion, mean speed, steering/throttle/brake behavior, action variation, and
+serialized final MetaDrive `info` data.
 
 Summary JSON files include:
 
@@ -318,7 +353,9 @@ Summary JSON files include:
 - a 95% Wilson confidence interval for success rate;
 - mean cost;
 - mean route completion;
-- mean speed when MetaDrive exposes it.
+- mean speed when MetaDrive exposes it;
+- mean base return and shaping penalty;
+- steering magnitude and saturation, throttle/brake rates, and action variation.
 
 ## Report
 
@@ -331,5 +368,5 @@ ideas.
 Build from the repository root:
 
 ```bash
-latexmk -pdf -interaction=nonstopmode -halt-on-error reports/main.tex
+latexmk -cd -pdf -interaction=nonstopmode -halt-on-error reports/main.tex
 ```

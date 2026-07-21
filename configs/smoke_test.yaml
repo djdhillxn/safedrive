@@ -11,7 +11,7 @@ train:
   n_envs: 1
   vec_env: dummy
   progress_bar: true
-  normalize_obs: true
+  normalize_obs: false
   normalize_reward: false
   checkpoint_freq: 256
   diagnostic_freq: 128
@@ -41,8 +41,16 @@ metadrive:
   random_traffic: false
   random_spawn_lane_index: false
   horizon: 300
+  truncate_as_terminate: true
   discrete_action: false
   accident_prob: 0.0
+  reward_shaping:
+    minimum_speed_km_h: 5.0
+    low_speed_penalty: 0.05
+    lateral_penalty: 0.05
+    timeout_penalty: 10.0
+    steering_penalty: 0.005
+    steering_smoothness_penalty: 0.01
 
 validation:
   start_seed: 100

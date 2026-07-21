@@ -3,6 +3,8 @@
 import copy
 from pathlib import Path
 
+import gymnasium as gym
+import numpy as np
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
 
@@ -17,6 +19,87 @@ MONITOR_INFO_KEYS = (
     "route_completion",
     "cost",
 )
+
+
+class _SafeDriveRewardWrapper(gym.Wrapper):
+    """Make stalling and unstable control visibly worse than useful progress."""
+
+    def __init__(self, env, settings):
+        super().__init__(env)
+        self.settings = copy.deepcopy(settings)
+        self.previous_action = None
+
+    def reset(self, **kwargs):
+        self.previous_action = None
+        return self.env.reset(**kwargs)
+
+    def _lane_penalty(self):
+        weight = float(self.settings.get("lateral_penalty", 0.0))
+        if weight <= 0.0:
+            return 0.0, 0.0
+        try:
+            vehicle = self.env.unwrapped.agent
+            reference_lanes = vehicle.navigation.current_ref_lanes
+            lane = vehicle.lane if vehicle.lane in reference_lanes else reference_lanes[0]
+            _, lateral = lane.local_coordinates(vehicle.position)
+            half_width = vehicle.navigation.get_current_lane_width() / 2.0
+            deviation = min(abs(float(lateral)) / max(float(half_width), 1e-6), 1.0)
+        except (AttributeError, AssertionError, IndexError, TypeError, ValueError):
+            return 0.0, 0.0
+        return weight * deviation**2, deviation
+
+    def step(self, action):
+        observation, base_reward, terminated, truncated, info = self.env.step(action)
+        info = dict(info)
+        recorded_action = info.get("action", info.get("raw_action", action))
+        if recorded_action is None:
+            recorded_action = action
+        action_values = np.asarray(recorded_action, dtype=float).reshape(-1)
+
+        minimum_speed = float(self.settings.get("minimum_speed_km_h", 0.0))
+        low_speed_weight = float(self.settings.get("low_speed_penalty", 0.0))
+        speed = float(info.get("velocity", 0.0))
+        low_speed_penalty = 0.0
+        if minimum_speed > 0.0 and not info.get("arrive_dest", False):
+            shortfall = max(minimum_speed - speed, 0.0) / minimum_speed
+            low_speed_penalty = low_speed_weight * shortfall
+
+        lateral_penalty, lateral_deviation = self._lane_penalty()
+
+        steering_penalty = 0.0
+        if action_values.size:
+            steering_weight = float(self.settings.get("steering_penalty", 0.0))
+            steering_penalty = steering_weight * float(action_values[0] ** 2)
+
+        smoothness_penalty = 0.0
+        if self.previous_action is not None and action_values.size:
+            smoothness_weight = float(self.settings.get("steering_smoothness_penalty", 0.0))
+            steering_change = float(action_values[0] - self.previous_action[0])
+            smoothness_penalty = smoothness_weight * steering_change**2
+        self.previous_action = action_values.copy()
+
+        timeout_penalty = 0.0
+        if info.get("max_step", False) and not info.get("arrive_dest", False):
+            timeout_penalty = float(self.settings.get("timeout_penalty", 0.0))
+
+        shaping_penalty = (
+            low_speed_penalty
+            + lateral_penalty
+            + steering_penalty
+            + smoothness_penalty
+            + timeout_penalty
+        )
+        reward = float(base_reward) - shaping_penalty
+        info["base_reward"] = float(base_reward)
+        info["low_speed_penalty"] = low_speed_penalty
+        info["lateral_penalty"] = lateral_penalty
+        info["lateral_deviation_ratio"] = lateral_deviation
+        info["steering_penalty"] = steering_penalty
+        info["steering_smoothness_penalty"] = smoothness_penalty
+        info["timeout_penalty"] = timeout_penalty
+        info["shaping_penalty"] = shaping_penalty
+        info["step_reward"] = reward
+        return observation, reward, terminated, truncated, info
 
 
 def sanitize_metadrive_config(env_config):
@@ -37,6 +120,7 @@ def make_metadrive_env(env_config, seed=None, monitor_file=None):
     from metadrive.envs import MetaDriveEnv
 
     cfg = sanitize_metadrive_config(env_config)
+    reward_shaping = cfg.pop("reward_shaping", None)
     policy_name = cfg.pop("_safedrive_agent_policy", None)
     if policy_name == "IDMPolicy":
         # Import the native MetaDrive policy only in the process that owns the
@@ -44,11 +128,17 @@ def make_metadrive_env(env_config, seed=None, monitor_file=None):
         from metadrive.policy.idm_policy import IDMPolicy
 
         cfg["agent_policy"] = IDMPolicy
+    elif policy_name == "ExpertPolicy":
+        from metadrive.policy.expert_policy import ExpertPolicy
+
+        cfg["agent_policy"] = ExpertPolicy
     elif policy_name is not None:
         raise ValueError(f"Unknown SafeDrive agent policy: {policy_name!r}")
     if seed is not None:
         set_global_seeds(seed)
     env = MetaDriveEnv(cfg)
+    if reward_shaping:
+        env = _SafeDriveRewardWrapper(env, reward_shaping)
     if seed is not None:
         try:
             env.reset(seed=seed)

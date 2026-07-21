@@ -32,7 +32,9 @@ def parse_args():
     parser.add_argument("--model", default="final", choices=["final", "best"])
     parser.add_argument("--split", default="test", choices=["train", "validation", "test"])
     parser.add_argument("--episodes", type=int, default=None)
-    parser.add_argument("--device", default=None, help="SB3 load device override, such as cpu or auto.")
+    parser.add_argument(
+        "--device", default=None, help="SB3 load device override, such as cpu or auto."
+    )
     parser.add_argument("--prefix", default=None, help="Output filename prefix.")
     parser.add_argument(
         "--overwrite",
@@ -80,7 +82,7 @@ def main():
             )
 
         evaluation = get_evaluation_config(config, args.split)
-        default_seeds = {"train": 0, "validation": 1000, "test": 2000}
+        default_seeds = {"train": 0, "validation": 1000, "test": 3000}
         default_seed = default_seeds[args.split]
         start_seed = int(evaluation.get("start_seed", default_seed))
         set_global_seeds(start_seed)
@@ -110,7 +112,9 @@ def main():
             logger.debug("No VecNormalize statistics found; using raw observations.")
 
         configured_device = config.get("algorithm", {}).get("kwargs", {}).get("device")
-        load_device = args.device or configured_device or ("cpu" if algorithm_name == "ppo" else "auto")
+        load_device = (
+            args.device or configured_device or ("cpu" if algorithm_name == "ppo" else "auto")
+        )
         logger.info("Loading %s model on %s: %s", args.model, load_device, model_path)
         model = algorithm_class.load(model_path, env=environment, device=load_device)
         episode_count = int(args.episodes or evaluation.get("episodes", 50))
@@ -142,15 +146,11 @@ def main():
                         "model": args.model,
                         "episodes": episode_count,
                         "start_seed": start_seed,
-                        "num_scenarios": int(
-                            evaluation.get("num_scenarios", episode_count)
-                        ),
+                        "num_scenarios": int(evaluation.get("num_scenarios", episode_count)),
                         "prefix": prefix,
                     }
                 )
-                metadata.setdefault("outputs", {})["test_eval_csv"] = str(
-                    paths["episodes_csv"]
-                )
+                metadata.setdefault("outputs", {})["test_eval_csv"] = str(paths["episodes_csv"])
                 metadata["outputs"]["test_eval_summary"] = str(paths["summary_json"])
                 write_json(metadata, metadata_path)
                 experiment = config.get("experiment", {})

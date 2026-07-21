@@ -11,7 +11,8 @@ train:
   n_envs: 4
   vec_env: subproc        # Use dummy only together with n_envs: 1.
   progress_bar: true
-  normalize_obs: true
+  # MetaDrive's state and lidar observations are already bounded in [0, 1].
+  normalize_obs: false
   normalize_reward: false
   checkpoint_freq: 50000
   diagnostic_freq: 10000
@@ -24,18 +25,19 @@ algorithm:
     # SB3 recommends CPU for PPO with an MLP. MetaDrive collection still uses
     # the four subprocess workers configured above.
     device: cpu
-    learning_rate: 0.0003
-    n_steps: 2048
-    # 4 environments x 2,048 steps = 8,192 samples per rollout. A batch of
-    # 512 divides that evenly and halves optimizer batches versus 256.
-    batch_size: 512
+    learning_rate: 0.0001
+    n_steps: 1024
+    # 4 environments x 1,024 steps gives twice as many policy updates as the
+    # previous 8,192-sample rollout while retaining 16 minibatches per epoch.
+    batch_size: 256
     n_epochs: 10
     gamma: 0.99
     gae_lambda: 0.95
     clip_range: 0.2
-    ent_coef: 0.001
+    ent_coef: 0.002
     vf_coef: 0.5
     max_grad_norm: 0.5
+    target_kl: 0.03
     verbose: 0
     policy_kwargs:
       net_arch: [256, 256]
@@ -44,45 +46,58 @@ metadrive:
   # Core single-agent procedural driving setup.
   use_render: false
   log_level: 50
-  map: 5
-  num_scenarios: 50
+  # Phase 1 is a learnable control benchmark, not the final difficulty ceiling.
+  map: 3
+  num_scenarios: 500
   start_seed: 0
-  traffic_density: 0.10
+  traffic_density: 0.05
   random_traffic: true
-  random_spawn_lane_index: true
+  random_spawn_lane_index: false
   horizon: 1000
+  # A horizon timeout is a task failure here, so RL algorithms must not
+  # bootstrap through it as if the episode simply continued.
+  truncate_as_terminate: true
   discrete_action: false
   # Keep dense progress reward, but make terminal outcomes matter and reward lane keeping.
-  success_reward: 50.0
-  out_of_road_penalty: 20.0
-  crash_vehicle_penalty: 20.0
-  crash_object_penalty: 20.0
-  crash_sidewalk_penalty: 20.0
-  driving_reward: 1.0
+  success_reward: 100.0
+  out_of_road_penalty: 50.0
+  crash_vehicle_penalty: 50.0
+  crash_object_penalty: 50.0
+  crash_sidewalk_penalty: 50.0
+  # Keep dense progress informative without letting it overwhelm terminal safety.
+  driving_reward: 0.2
   speed_reward: 0.05
   use_lateral_reward: true
   crash_vehicle_done: true
   out_of_road_done: true
   crash_object_done: true
   accident_prob: 0.0
+  reward_shaping:
+    minimum_speed_km_h: 5.0
+    low_speed_penalty: 0.05
+    lateral_penalty: 0.05
+    timeout_penalty: 50.0
+    steering_penalty: 0.005
+    steering_smoothness_penalty: 0.01
 
 validation:
   # Fixed seeds used only for checkpoint selection.
   start_seed: 1000
   num_scenarios: 50
-  traffic_density: 0.10
+  traffic_density: 0.05
   random_traffic: false
   random_spawn_lane_index: false
-  episodes: 20
+  episodes: 50
   deterministic: true
   progress: false
   vec_env: subproc
 
 test:
   # Held-out seeds are evaluated once after the best checkpoint is frozen.
-  start_seed: 2000
+  # Seeds 2000--2099 informed the July tuning diagnosis and are no longer held out.
+  start_seed: 3000
   num_scenarios: 100
-  traffic_density: 0.10
+  traffic_density: 0.05
   random_traffic: false
   random_spawn_lane_index: false
   episodes: 100

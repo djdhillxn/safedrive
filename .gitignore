@@ -3,3 +3,12 @@ __pycache__/
 *.py[cod]
 .ipynb_checkpoints/
 runs/
+*.egg-info/
+reports/*.aux
+reports/*.bbl
+reports/*.blg
+reports/*.fdb_latexmk
+reports/*.fls
+reports/*.log
+reports/*.out
+reports/*.pdf

@@ -87,13 +87,96 @@ route completion by 0.00055 against 0.01, and mean speed by 0.00053 km/h against
 0.254. The gate therefore passed. The first 10-episode pass had 40\% success and
 is retained only as gate evidence, not as the final IDM benchmark.
 
+\section{2026-07-21 newest-run audit and ground-up correction}
+The later Google Drive import supersedes the artifacts listed above for diagnosis. The
+newest completed learned runs are
+\texttt{20260721\_090542\_ppo\_mvp\_ppo\_seed0} and
+\texttt{20260721\_105717\_sac\_mvp\_sac\_seed0}; the newest IDM test is
+\texttt{20260721\_181208\_idm\_baseline\_seed0}. Only these timestamps were used for the
+second audit.
+
+The frozen PPO winner reached 4\% success, 10\% collision, 75\% off-road, 11\%
+timeout, and 32.5\% route completion on 100 test episodes. Its validation series peaked
+at 10\% success at 350,000 steps and fell back to 0\% at 500,000. PPO's explained
+variance and other optimizer diagnostics were mostly healthy. The agent was learning the
+configured return, but that return was not a good enough proxy for safe completion. In
+particular, successful episodes returned about 480 on average, while out-of-road, crash,
+and timeout episodes still returned about 88, 103, and 240. Failure remained profitable.
+
+The frozen SAC winner reached 0\% success, 7\% off-road, 93\% timeout, 15.5\% route
+completion, and only 0.99 km/h mean speed. The failure is not missing evaluation output.
+The critic loss grew from 0.17 at 210,000 steps to 61.9 at 310,000, 1,858 at 410,000,
+and 5,817 at 500,000, with a peak above 12,000. At the same time the learned entropy
+coefficient grew from roughly 0.01 to 1.36 and the actor-loss magnitude exceeded 1,000.
+The best validation point was at 200,000 steps; later learning collapsed toward braking
+and stalling. Timeout episodes still returned about 72 on average, so the replay learner
+had both an attractive behavioral loophole and unstable value targets.
+
+The ground-up code audit found the following causal defects:
+\begin{enumerate}
+  \item MetaDrive replaces only the terminal step reward on success or failure; it does
+        not erase the dense progress accumulated earlier. Terminal penalties of 20 could
+        not dominate hundreds of units of dense return.
+  \item \texttt{use\_lateral\_reward} only scales positive progress near a lane edge; it
+        is not a negative lane-centering cost. The prior documentation overstated it.
+  \item No timeout penalty was configured, and \texttt{truncate\_as\_terminate} was
+        false. Stable-Baselines3 therefore bootstrapped through horizon truncations. That
+        is inappropriate here because this project explicitly counts timeout as failure,
+        and it was especially damaging to SAC's replay targets.
+  \item MetaDrive's state/lidar observation is already bounded in [0,1]. A second adaptive
+        \texttt{VecNormalize} transform added nonstationarity without evidence of benefit.
+  \item The old task exposed only 50 training scenarios on a five-block map with density
+        0.1. It was simultaneously narrow for generalization and difficult enough that
+        even native reference policies often failed.
+  \item Earlier telemetry retained terminal actions but not full-rollout action behavior or
+        the split between base reward and shaping penalties, making collapse harder to see.
+\end{enumerate}
+
+Native-policy sanity checks on validation seeds 1000--1019 separated simulator difficulty
+from optimizer behavior:
+\begin{center}
+\begin{tabular}{lrr}
+  \toprule
+  Task & Expert success & IDM success \\
+  \midrule
+  Map 5, density 0.10 & 55\% & 35\% \\
+  Map 3, density 0.00 & 100\% & 100\% \\
+  Map 3, density 0.05 & 100\% & 100\% \\
+  Map 4, density 0.05 & 95\% & 95\% \\
+  Map 4, density 0.10 & 65\% & 50\% \\
+  \bottomrule
+\end{tabular}
+\end{center}
+This evidence justifies using map 3 at density 0.05 as the Phase-1 learning benchmark.
+This is an intentional simplification, not an algorithmic breakthrough. Higher map and
+traffic difficulty belongs in a later robustness phase after basic learning is established.
+
+The new implementation uses 500 training scenarios, fixed spawn lanes, direct bounded
+observations, terminal treatment of timeouts, success reward 100, failure penalties
+50, and forward-progress weight 0.2. A wrapper penalizes speed below 5 km/h, lateral lane
+deviation, horizon timeout, steering magnitude, and abrupt steering changes while logging the base reward and
+each penalty. PPO now uses learning rate $10^{-4}$, 4,096-sample rollouts, batch size 256,
+and CPU. SAC uses learning rate $10^{-4}$, a 500,000-step replay buffer, 20,000 learning
+starts, batch size 512, GPU when available, and fixed entropy coefficient 0.05. Full action
+distribution metrics are saved during training and evaluation.
+
+Because seeds 2000--2099 informed this diagnosis, the untouched final test range moves to
+3000--3099. Before another 500,000-step run, each algorithm must pass a 100,000-step
+no-traffic control pilot on fixed validation seeds with at least 10\% success and 50\%
+route completion. The SAC pilot also fails on a non-finite or final critic loss above
+1,000. Pilot pointers are named \texttt{latest\_ppo\_pilot.txt} and
+\texttt{latest\_sac\_pilot.txt}, so they cannot replace full-run pointers. If a gate
+fails, stop; more timesteps are not the next experiment.
+
 \section{Canonical experiment order}
 \begin{enumerate}
   \item Run the smoke test; do not use it as a report result.
   \item Verify reproducible evaluation by running IDM twice on the same 10 validation seeds,
         requiring identical categorical outcomes and near-identical aggregate metrics.
-  \item Train PPO and save its complete run directory.
-  \item Train SAC and save its complete run directory.
+  \item Require the native expert to achieve at least 80\% success on 10 validation seeds.
+  \item Run the 100,000-step no-traffic PPO and SAC controls; require both learning gates.
+  \item Train PPO and save its complete run directory only after its gate passes.
+  \item Train SAC and save its complete run directory only after its gate passes.
   \item After both configurations are frozen, evaluate IDM and each validation winner
         once on the same 100 held-out test scenarios.
   \item Record one top-down rollout per learned agent.
@@ -106,7 +189,19 @@ Run from the repository root:
 \begin{verbatim}
 python -m scripts.train --config configs/smoke_test.yaml
 python -m scripts.evaluate_baseline --config configs/ppo_mvp.yaml \
+  --policy expert --split validation --episodes 10 --prefix expert_sanity
+python -m scripts.evaluate_baseline --config configs/ppo_mvp.yaml \
   --split validation --episodes 10 --prefix idm_repro --verify-repeat
+python -m scripts.train --config configs/ppo_mvp.yaml --run-name ppo_control_pilot \
+  experiment.latest_name=ppo_pilot train.total_timesteps=100000 \
+  train.checkpoint_freq=25000 train.eval_freq=25000 validation.episodes=20 \
+  metadrive.traffic_density=0.0 metadrive.random_traffic=false \
+  validation.traffic_density=0.0
+python -m scripts.train --config configs/sac_mvp.yaml --run-name sac_control_pilot \
+  experiment.latest_name=sac_pilot train.total_timesteps=100000 \
+  train.checkpoint_freq=25000 train.eval_freq=25000 validation.episodes=20 \
+  metadrive.traffic_density=0.0 metadrive.random_traffic=false \
+  validation.traffic_density=0.0
 python -m scripts.train --config configs/ppo_mvp.yaml
 python -m scripts.train --config configs/sac_mvp.yaml
 python -m scripts.evaluate --run-dir <PPO_RUN> --model best \
@@ -124,7 +219,7 @@ python -m scripts.record_video --run-dir <PPO_RUN> --model best \
 python -m scripts.record_video --run-dir <SAC_RUN> --model best \
   --seed <DISCLOSED_SUCCESSFUL_TEST_SEED> --steps 1000
 python -m scripts.compare_runs --phase1
-latexmk -pdf -interaction=nonstopmode -halt-on-error reports/main.tex
+latexmk -cd -pdf -interaction=nonstopmode -halt-on-error reports/main.tex
 \end{verbatim}
 
 \section{Phase-1 configuration record}
@@ -136,10 +231,12 @@ latexmk -pdf -interaction=nonstopmode -halt-on-error reports/main.tex
   Policy & MLP & MLP \\
   Action space & Continuous & Continuous \\
   Vector environments & 4 subprocess & 1 dummy \\
-  Observation normalization & Yes & Yes \\
+  Observation normalization & No & No \\
+  Map blocks / traffic density & 3 / 0.05 & 3 / 0.05 \\
+  Training scenarios & 500 & 500 \\
   Training start seed & 0 & 0 \\
   Validation start seed & 1000 & 1000 \\
-  Held-out test start seed & 2000 & 2000 \\
+  Held-out test start seed & 3000 & 3000 \\
   Held-out test episodes & 100 & 100 \\
   \bottomrule
 \end{tabular}
@@ -190,7 +287,7 @@ Record the following from each long run's \texttt{logs/train.log} and
   \item Colab may include the obsolete \texttt{gym} distribution. The notebooks remove it
         before installing SafeDrive, which uses Gymnasium.
   \item Each reset seed must remain inside its configured range: validation begins at
-        1000 and held-out testing begins at 2000.
+        1000 and held-out testing begins at 3000 for corrected configurations.
   \item The initial smoke and SAC runs failed because training and callback evaluation both
         created MetaDrive's process-global engine in one Python process. Callback evaluation
         now uses a one-worker \texttt{SubprocVecEnv}.
@@ -210,10 +307,10 @@ Record the following from each long run's \texttt{logs/train.log} and
 \begin{itemize}
   \item Repeat the already-passing 10-scenario IDM reproducibility gate once in Colab as
         a runtime smoke check before spending credits on training.
-  \item The imported PPO and SAC checkpoints have now been backfilled on deterministic
-        validation seeds. Do not consume seeds 2000--2099 for these superseded policies;
-        reserve that held-out range for the winners from the next frozen configurations.
-  \item Run the short easy-environment diagnostic pilots before another full run.
+  \item Seeds 2000--2099 were consumed by the second audit. Do not report them as held out;
+        corrected frozen configurations use 3000--3099 once.
+  \item Run the short no-traffic diagnostic pilots and enforce their gates before another
+        full run.
   \item Final numerical results and report placeholders: TODO after corrected long runs.
   \item Whether 1,000,000 timesteps materially improves either agent: optional manual test.
   \item Local macOS versus Colab runtime differences: TODO after both smoke tests.

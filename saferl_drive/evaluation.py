@@ -69,17 +69,32 @@ def _episode_seed(start_seed, num_scenarios, episode):
     return int(start_seed) + episode % scenario_count
 
 
+def _recorded_action(info, requested_action):
+    """Prefer the action MetaDrive actually applied over the requested action."""
+    candidate = info.get("action", info.get("raw_action", requested_action))
+    try:
+        values = np.asarray(candidate, dtype=float).reshape(-1)
+    except (TypeError, ValueError):
+        return None
+    if values.size < 2:
+        return None
+    return values[:2]
+
+
 def _episode_row(
     episode,
     requested_seed,
     return_sum,
+    base_return_sum,
+    shaping_penalty_sum,
     length,
     cost_sum,
     speeds,
+    actions,
     route_completion,
     final_info,
 ):
-    return {
+    row = {
         "episode": episode,
         "env_seed": _safe_int(
             final_info,
@@ -87,6 +102,8 @@ def _episode_row(
             default=requested_seed if requested_seed is not None else -1,
         ),
         "return_sum": return_sum,
+        "base_return_sum": base_return_sum,
+        "shaping_penalty_sum": shaping_penalty_sum,
         "length": length,
         "success": _safe_bool(final_info, SUCCESS_KEYS),
         "crash": _safe_bool(final_info, CRASH_KEYS),
@@ -101,6 +118,25 @@ def _episode_row(
         "mean_speed_km_h": float(np.mean(speeds)) if speeds else np.nan,
         "final_info": json_text(final_info),
     }
+    if actions:
+        action_array = np.asarray(actions, dtype=float)
+        steering = action_array[:, 0]
+        throttle_brake = action_array[:, 1]
+        row.update(
+            {
+                "mean_steering": float(np.mean(steering)),
+                "mean_abs_steering": float(np.mean(np.abs(steering))),
+                "steering_saturation_rate": float(np.mean(np.abs(steering) >= 0.95)),
+                "mean_throttle_brake": float(np.mean(throttle_brake)),
+                "throttle_rate": float(np.mean(throttle_brake > 0.05)),
+                "brake_rate": float(np.mean(throttle_brake < -0.05)),
+            }
+        )
+        if len(action_array) > 1:
+            row["mean_action_change"] = float(np.mean(np.abs(np.diff(action_array, axis=0))))
+        else:
+            row["mean_action_change"] = 0.0
+    return row
 
 
 def evaluate_policy_closed_loop(
@@ -124,9 +160,12 @@ def evaluate_policy_closed_loop(
             observation, info = env.reset(seed=requested_seed)
         done = False
         return_sum = 0.0
+        base_return_sum = 0.0
+        shaping_penalty_sum = 0.0
         length = 0
         cost_sum = 0.0
         speeds = []
+        actions = []
         route_completion = 0.0
         final_info = dict(info)
 
@@ -135,7 +174,16 @@ def evaluate_policy_closed_loop(
             observation, reward, terminated, truncated, info = env.step(action)
             done = bool(terminated or truncated)
             return_sum += float(reward)
+            base_return_sum += _safe_float(info, ("base_reward",), default=float(reward))
+            shaping_penalty_sum += _safe_float(
+                info,
+                ("shaping_penalty",),
+                default=0.0,
+            )
             length += 1
+            action_values = _recorded_action(info, action)
+            if action_values is not None:
+                actions.append(action_values)
             cost_sum += _safe_float(info, ("cost",), default=0.0)
             speed = _speed_km_h(info)
             if not np.isnan(speed):
@@ -152,9 +200,12 @@ def evaluate_policy_closed_loop(
                 episode,
                 requested_seed,
                 return_sum,
+                base_return_sum,
+                shaping_penalty_sum,
                 length,
                 cost_sum,
                 speeds,
+                actions,
                 route_completion,
                 final_info,
             )
@@ -185,9 +236,12 @@ def evaluate_policy_vecenv(
         observation = venv.reset()
         done = False
         return_sum = 0.0
+        base_return_sum = 0.0
+        shaping_penalty_sum = 0.0
         length = 0
         cost_sum = 0.0
         speeds = []
+        actions = []
         route_completion = 0.0
         final_info = {}
 
@@ -196,8 +250,18 @@ def evaluate_policy_vecenv(
             observation, rewards, dones, infos = venv.step(action)
             info = dict(infos[0])
             done = bool(dones[0])
-            return_sum += float(rewards[0])
+            reward = float(rewards[0])
+            return_sum += reward
+            base_return_sum += _safe_float(info, ("base_reward",), default=reward)
+            shaping_penalty_sum += _safe_float(
+                info,
+                ("shaping_penalty",),
+                default=0.0,
+            )
             length += 1
+            action_values = _recorded_action(info, action)
+            if action_values is not None:
+                actions.append(action_values)
             cost_sum += _safe_float(info, ("cost",), default=0.0)
             speed = _speed_km_h(info)
             if not np.isnan(speed):
@@ -214,9 +278,12 @@ def evaluate_policy_vecenv(
                 episode,
                 requested_seed,
                 return_sum,
+                base_return_sum,
+                shaping_penalty_sum,
                 length,
                 cost_sum,
                 speeds,
+                actions,
                 route_completion,
                 final_info,
             )
@@ -232,9 +299,11 @@ def _wilson_interval(successes, episodes):
     rate = successes / episodes
     denominator = 1.0 + z * z / episodes
     center = (rate + z * z / (2.0 * episodes)) / denominator
-    margin = z * np.sqrt(
-        rate * (1.0 - rate) / episodes + z * z / (4.0 * episodes * episodes)
-    ) / denominator
+    margin = (
+        z
+        * np.sqrt(rate * (1.0 - rate) / episodes + z * z / (4.0 * episodes * episodes))
+        / denominator
+    )
     return float(center - margin), float(center + margin)
 
 
@@ -259,6 +328,20 @@ def summarize_metrics(frame):
         "mean_cost": float(frame["cost_sum"].mean()),
         "mean_route_completion": float(frame["route_completion"].mean()),
     }
+    optional_metrics = {
+        "base_return_sum": "mean_base_return",
+        "shaping_penalty_sum": "mean_shaping_penalty",
+        "mean_steering": "mean_steering",
+        "mean_abs_steering": "mean_abs_steering",
+        "steering_saturation_rate": "steering_saturation_rate",
+        "mean_throttle_brake": "mean_throttle_brake",
+        "throttle_rate": "throttle_rate",
+        "brake_rate": "brake_rate",
+        "mean_action_change": "mean_action_change",
+    }
+    for column, summary_name in optional_metrics.items():
+        if column in frame and frame[column].notna().any():
+            summary[summary_name] = float(frame[column].mean())
     if "mean_speed_km_h" in frame and frame["mean_speed_km_h"].notna().any():
         summary["mean_speed_km_h"] = float(frame["mean_speed_km_h"].mean())
     return summary
@@ -292,6 +375,15 @@ def comparison_summary_row(name, summary, run_dir=None, summary_path=None):
         "mean_cost",
         "mean_route_completion",
         "mean_speed_km_h",
+        "mean_base_return",
+        "mean_shaping_penalty",
+        "mean_steering",
+        "mean_abs_steering",
+        "steering_saturation_rate",
+        "mean_throttle_brake",
+        "throttle_rate",
+        "brake_rate",
+        "mean_action_change",
     ]
     row = {"name": name}
     for metric in metric_names:

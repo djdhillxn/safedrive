@@ -9,6 +9,7 @@ import argparse
 import sys
 from collections import deque
 
+import numpy as np
 from stable_baselines3.common.callbacks import (
     BaseCallback,
     CallbackList,
@@ -80,6 +81,7 @@ class _TrainingDiagnosticsCallback(BaseCallback):
         self.output_path = output_path
         self.save_freq = max(int(save_freq), 1)
         self.outcomes = deque(maxlen=window)
+        self.actions = deque(maxlen=10_000)
         self.history = []
 
     def _record_finished_episodes(self):
@@ -104,8 +106,17 @@ class _TrainingDiagnosticsCallback(BaseCallback):
             return None
         return sum(float(item[key]) for item in self.outcomes) / len(self.outcomes)
 
+    def _record_actions(self):
+        actions = np.asarray(self.locals.get("actions", []), dtype=float)
+        if actions.size == 0:
+            return
+        for action in actions.reshape(-1, actions.shape[-1]):
+            if action.size >= 2:
+                self.actions.append(action[:2].copy())
+
     def _on_step(self):
         self._record_finished_episodes()
+        self._record_actions()
         if self.n_calls % self.save_freq != 0:
             return True
 
@@ -141,6 +152,24 @@ class _TrainingDiagnosticsCallback(BaseCallback):
             for name, value in rolling.items():
                 if name != "episodes":
                     self.logger.record(f"train_outcomes/{name}", value)
+
+        if self.actions:
+            action_array = np.asarray(self.actions, dtype=float)
+            steering = action_array[:, 0]
+            throttle_brake = action_array[:, 1]
+            action_behavior = {
+                "steps": len(action_array),
+                "mean_steering": float(np.mean(steering)),
+                "mean_abs_steering": float(np.mean(np.abs(steering))),
+                "steering_saturation_rate": float(np.mean(np.abs(steering) >= 0.95)),
+                "mean_throttle_brake": float(np.mean(throttle_brake)),
+                "throttle_rate": float(np.mean(throttle_brake > 0.05)),
+                "brake_rate": float(np.mean(throttle_brake < -0.05)),
+            }
+            row["action_behavior"] = action_behavior
+            for name, value in action_behavior.items():
+                if name != "steps":
+                    self.logger.record(f"train_actions/{name}", value)
 
         self.history.append(row)
         write_json({"history": self.history}, self.output_path)
@@ -300,6 +329,8 @@ def main():
         "config_path": str(args.config),
         "run_dir": str(run_dir),
         "algorithm": algorithm_name,
+        "experiment_name": experiment.get("name", "metadrive_mvp"),
+        "latest_name": experiment.get("latest_name", algorithm_name),
         "seed": seed,
         "training": {
             "total_timesteps": int(training.get("total_timesteps", 500_000)),
@@ -314,7 +345,7 @@ def main():
         },
         "test": {
             "episodes": int(testing.get("episodes", 100)),
-            "start_seed": int(testing.get("start_seed", 2000)),
+            "start_seed": int(testing.get("start_seed", 3000)),
             "num_scenarios": int(testing.get("num_scenarios", 100)),
             "vec_env": testing.get("vec_env", "subproc"),
         },
@@ -485,9 +516,7 @@ def main():
             logger.debug("Saved training plot: %s", training_plot)
             if validation_csv.exists():
                 validation_plots = plot_eval_summary(validation_csv, run_dir / "plots")
-                metadata["outputs"]["validation_plots"] = [
-                    str(path) for path in validation_plots
-                ]
+                metadata["outputs"]["validation_plots"] = [str(path) for path in validation_plots]
                 logger.debug("Saved validation plots: %s", validation_plots)
         except Exception as error:
             logger.warning("Plot generation skipped: %s", error)

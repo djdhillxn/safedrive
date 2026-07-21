@@ -79,7 +79,7 @@ def main():
         testing = get_evaluation_config(config, "test")
         video_seed = args.seed
         if video_seed is None:
-            video_seed = int(testing.get("start_seed", 2000))
+            video_seed = int(testing.get("start_seed", 3000))
         set_global_seeds(video_seed)
 
         environment_config = make_eval_metadrive_config(config, "test")
@@ -112,7 +112,9 @@ def main():
                 )
 
         configured_device = config.get("algorithm", {}).get("kwargs", {}).get("device")
-        load_device = args.device or configured_device or ("cpu" if algorithm_name == "ppo" else "auto")
+        load_device = (
+            args.device or configured_device or ("cpu" if algorithm_name == "ppo" else "auto")
+        )
         logger.info(
             "Loading %s model on %s for deterministic scenario seed %s: %s",
             selected_model,

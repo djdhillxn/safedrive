@@ -11,7 +11,7 @@ train:
   n_envs: 1               # SAC can use VecEnv, but 1 env keeps replay-buffer semantics simple.
   vec_env: dummy
   progress_bar: true
-  normalize_obs: true
+  normalize_obs: false
   normalize_reward: false
   checkpoint_freq: 50000
   diagnostic_freq: 10000
@@ -23,15 +23,17 @@ algorithm:
   kwargs:
     # Use CUDA in Colab when available, with an automatic CPU fallback.
     device: auto
-    learning_rate: 0.0003
-    buffer_size: 300000
-    learning_starts: 10000
-    batch_size: 256
+    learning_rate: 0.0001
+    buffer_size: 500000
+    learning_starts: 20000
+    batch_size: 512
     tau: 0.005
     gamma: 0.99
     train_freq: 1
     gradient_steps: 1
-    ent_coef: auto
+    # The previous learned coefficient grew from 0.01 to 1.36 while the critic
+    # diverged. A small fixed value prevents that runaway feedback loop.
+    ent_coef: 0.05
     target_update_interval: 1
     verbose: 0
     policy_kwargs:
@@ -40,42 +42,50 @@ algorithm:
 metadrive:
   use_render: false
   log_level: 50
-  map: 5
-  num_scenarios: 50
+  map: 3
+  num_scenarios: 500
   start_seed: 0
-  traffic_density: 0.10
+  traffic_density: 0.05
   random_traffic: true
-  random_spawn_lane_index: true
+  random_spawn_lane_index: false
   horizon: 1000
+  truncate_as_terminate: true
   discrete_action: false
-  success_reward: 50.0
-  out_of_road_penalty: 20.0
-  crash_vehicle_penalty: 20.0
-  crash_object_penalty: 20.0
-  crash_sidewalk_penalty: 20.0
-  driving_reward: 1.0
+  success_reward: 100.0
+  out_of_road_penalty: 50.0
+  crash_vehicle_penalty: 50.0
+  crash_object_penalty: 50.0
+  crash_sidewalk_penalty: 50.0
+  driving_reward: 0.2
   speed_reward: 0.05
   use_lateral_reward: true
   crash_vehicle_done: true
   out_of_road_done: true
   crash_object_done: true
   accident_prob: 0.0
+  reward_shaping:
+    minimum_speed_km_h: 5.0
+    low_speed_penalty: 0.05
+    lateral_penalty: 0.05
+    timeout_penalty: 50.0
+    steering_penalty: 0.005
+    steering_smoothness_penalty: 0.01
 
 validation:
   start_seed: 1000
   num_scenarios: 50
-  traffic_density: 0.10
+  traffic_density: 0.05
   random_traffic: false
   random_spawn_lane_index: false
-  episodes: 20
+  episodes: 50
   deterministic: true
   progress: false
   vec_env: subproc
 
 test:
-  start_seed: 2000
+  start_seed: 3000
   num_scenarios: 100
-  traffic_density: 0.10
+  traffic_density: 0.05
   random_traffic: false
   random_spawn_lane_index: false
   episodes: 100
