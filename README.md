@@ -1,7 +1,7 @@
 # SafeRL-Drive: MetaDrive MVP with PPO and SAC
 
 SafeRL-Drive is a focused Phase-1 autonomous-driving reinforcement-learning project. It
-trains continuous-control PPO and SAC agents in MetaDrive, evaluates them on unseen
+trains continuous-control PPO and SAC agents in MetaDrive, evaluates them on held-out
 procedural scenarios, and compares them with MetaDrive's rule-based IDM controller.
 
 The project uses vector observations and records success, collision, off-road, timeout,
@@ -61,21 +61,23 @@ Run only this limited matrix, in order:
 
 1. **Smoke test** — verify MetaDrive, Stable-Baselines3, training, evaluation, plotting,
    and artifact creation with `configs/smoke_test.yaml`. This is not a report result.
-2. **IDM baseline** — evaluate MetaDrive's `IDMPolicy` without training for 50 unseen
-   episodes beginning at seed 1000.
+2. **Reproducibility gate** — repeat IDM over the same 10 fixed validation trials and
+   require identical categorical outcomes and near-identical aggregate metrics.
 3. **PPO** — train one continuous-control vector-observation run for 500,000 timesteps
    using four subprocess environments.
 4. **SAC** — train one comparable run for 500,000 timesteps using one environment.
-5. **Best-model evaluation** — explicitly evaluate the PPO and SAC best checkpoints on
-   50 unseen scenarios.
+5. **Held-out evaluation** — after both learned configurations are frozen, evaluate IDM
+   and each frozen validation winner once on 100 held-out test scenarios.
 6. **Videos** — record one top-down best-model rollout for PPO and one for SAC.
 7. **Final comparison** — compare IDM, PPO, and SAC and write the Phase-1 CSV, JSON, and
    plot.
 8. **Report generation** — fill the result placeholders and compile the LaTeX report.
 
-Training scenarios begin at seed 0. Evaluation scenarios begin at seed 1000, so the
-reported evaluation roads are disjoint from the training range. Phase 1 intentionally has
-one training run for PPO and one for SAC; it does not run seed sweeps.
+Training scenarios begin at seed 0. Fixed validation scenarios begin at seed 1000 and are
+used for checkpoint selection. The reported test scenarios begin at seed 2000 and are not
+consulted until the checkpoint is frozen. Validation and test traffic generation is
+deterministic, while training keeps randomized traffic for diversity. Phase 1 intentionally
+has one training run for PPO and one for SAC; it does not run seed sweeps.
 
 ## Google Colab driver notebook
 
@@ -101,10 +103,10 @@ Notebook run order:
 4. Clone or fast-forward pull the public GitHub repository.
 5. Remove legacy Gym and install the repository with `pip install -e .`.
 6. Run the smoke test.
-7. Run the IDM baseline and copy it to Drive.
+7. Run the deterministic IDM reproducibility gate.
 8. Run PPO and copy it to Drive.
 9. Run SAC and copy it to Drive.
-10. Evaluate the best PPO and SAC models.
+10. Run the IDM, best PPO, and best SAC held-out tests and copy them to Drive.
 11. Record one video for each learned agent.
 12. Build and display the Phase-1 comparison.
 13. Compile the report if `latexmk` is available.
@@ -124,16 +126,19 @@ Run the smoke test first:
 python -m scripts.train --config configs/smoke_test.yaml
 ```
 
-Evaluate the rule-based IDM baseline:
+Run the rule-based reproducibility gate:
 
 ```bash
 python -m scripts.evaluate_baseline \
   --config configs/ppo_mvp.yaml \
-  --episodes 50 \
-  --prefix idm_unseen
+  --split validation \
+  --episodes 10 \
+  --prefix idm_repro \
+  --verify-repeat
 ```
 
-Train PPO and SAC:
+Train PPO and SAC. Training selects and freezes a validation winner but deliberately does
+not inspect the held-out test split:
 
 ```bash
 python -m scripts.train --config configs/ppo_mvp.yaml
@@ -145,14 +150,14 @@ Dotlist overrides remain available:
 ```bash
 python -m scripts.train --config configs/ppo_mvp.yaml \
   train.total_timesteps=1000000 \
-  eval.episodes=50
+  test.episodes=100
 ```
 
 The successful runs update `runs/latest_idm.txt`, `runs/latest_ppo.txt`, and
 `runs/latest_sac.txt`. The smoke test uses `runs/latest_smoke.txt`, so it cannot replace the
 latest report-quality PPO pointer.
 
-MetaDrive owns one process-global simulation engine. During training, callback evaluation
+MetaDrive owns one process-global simulation engine. During training, validation
 runs in a separate subprocess even when PPO, SAC, or the smoke test uses one training
 environment. Do not configure more than one MetaDrive environment with `DummyVecEnv`; use
 `subproc` or set `n_envs: 1`.
@@ -170,14 +175,22 @@ is printed at startup and saved in `run_metadata.json`. To compare SAC wall-cloc
 a particular runtime, run a short trial with `algorithm.kwargs.device=cpu`; GPU speedups
 are workload-dependent.
 
-Evaluate a trained best model:
+After both learned configurations are frozen, run the IDM test and evaluate each trained
+best model on the same held-out split:
 
 ```bash
+python -m scripts.evaluate_baseline \
+  --config configs/ppo_mvp.yaml \
+  --split test \
+  --episodes 100 \
+  --prefix idm_test
+
 python -m scripts.evaluate \
   --run-dir runs/<ppo-run> \
   --model best \
-  --episodes 50 \
-  --prefix best_unseen
+  --split test \
+  --episodes 100 \
+  --prefix best_test
 ```
 
 If an interrupted short run did not create `best_model.zip`, the evaluation command gives
@@ -188,23 +201,22 @@ to final automatically with a warning:
 python -m scripts.record_video \
   --run-dir runs/<ppo-run> \
   --model best \
+  --seed 2007 \
   --steps 1000
 ```
-
-The Colab helper `restore_run_from_drive("<run-directory>", "ppo")` restores an existing
-PPO run from Drive and recreates its latest-run pointer. Use `"sac"` for a SAC run. This
-allows best-model evaluation or video recording in a new runtime without retraining.
 
 ## Interpreting a weak PPO result
 
 The smoke test is intentionally easier than the Phase-1 benchmark: it has no traffic, two
 simple scenarios, and only checks wiring. It is not a performance baseline. Compare PPO
-with IDM on the same unseen seeds instead.
+with IDM on the same held-out seeds instead.
 
 Always evaluate `best_model.zip` before judging a completed run. The final PPO update can
-be worse than an earlier checkpoint. New runs save `best_vecnormalize.pkl` beside the best
-model so that checkpoint is evaluated with the matching observation statistics. Older
-runs fall back to final normalization statistics with a warning.
+be worse than an earlier checkpoint. The best checkpoint is now selected first by
+validation success and then by route completion and lower failure rates, instead of mean
+reward alone. New runs save `best_vecnormalize.pkl` beside the best model so that checkpoint
+is evaluated with the matching observation statistics. Older runs fall back to final
+normalization statistics with a warning.
 
 To distinguish poor learning from poor generalization, evaluate the same model on its
 training seed range under a separate prefix:
@@ -213,13 +225,12 @@ training seed range under a separate prefix:
 python -m scripts.evaluate \
   --run-dir runs/<ppo-run> \
   --model best \
+  --split train \
   --episodes 50 \
-  --prefix best_train_seeds \
-  eval.start_seed=0 \
-  eval.num_scenarios=50
+  --prefix best_train_seeds
 ```
 
-High training-seed success with low unseen success indicates overfitting. Low success on
+High training-seed success with low validation success indicates overfitting. Low success on
 both ranges indicates an optimization or reward problem. The Phase-1 configs now enable
 lane-centered progress, strengthen success and safety terminal rewards, reduce the pure
 speed incentive, and use a larger PPO policy network.
@@ -229,8 +240,8 @@ Manual summary comparison is still supported:
 ```bash
 python -m scripts.compare_runs \
   --summaries \
-    runs/<ppo-run>/eval/final_unseen_summary.json \
-    runs/<sac-run>/eval/final_unseen_summary.json \
+    runs/<ppo-run>/eval/best_test_summary.json \
+    runs/<sac-run>/eval/best_test_summary.json \
   --output runs/ppo_vs_sac_eval_summary.png
 ```
 
@@ -251,25 +262,28 @@ run_dir/
 ├── logs/
 │   ├── train.log
 │   ├── train_monitor/*.monitor.csv
+│   ├── training_diagnostics.json
 │   └── tensorboard/                 # when enabled
 ├── models/
 │   ├── final_model.zip
-│   ├── best_model.zip               # when EvalCallback runs
+│   ├── best_model.zip               # success-first validation winner
 │   ├── vecnormalize.pkl
 │   ├── best_vecnormalize.pkl         # statistics captured with best_model.zip
 │   └── replay_buffer.pkl             # SAC
 ├── checkpoints/
 ├── eval/
-│   ├── final_unseen_episodes.csv
-│   ├── final_unseen_summary.json
-│   ├── best_unseen_episodes.csv      # after explicit best evaluation
-│   └── best_unseen_summary.json
+│   ├── validation_history.json
+│   ├── best_validation_episodes.csv
+│   ├── best_validation_summary.json
+│   ├── best_test_episodes.csv
+│   └── best_test_summary.json
 ├── plots/
 │   ├── training_returns.png
 │   ├── eval_route_completion.png
 │   └── eval_outcome_rates.png
 └── videos/
-    └── <algorithm>_<best-or-final>_topdown.mp4
+    ├── <algorithm>_<best-or-final>_seed<seed>_topdown.mp4
+    └── <algorithm>_<best-or-final>_seed<seed>_topdown.json
 ```
 
 The IDM run uses the same evaluation CSV, summary JSON, plots, log, and metadata layout,
@@ -301,6 +315,7 @@ Summary JSON files include:
 - mean and standard deviation of return;
 - mean episode length;
 - success, collision, off-road, and timeout rates;
+- a 95% Wilson confidence interval for success rate;
 - mean cost;
 - mean route completion;
 - mean speed when MetaDrive exposes it.

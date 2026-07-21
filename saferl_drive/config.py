@@ -60,13 +60,51 @@ def apply_dotlist_overrides(cfg, overrides):
     return result
 
 
-def make_eval_metadrive_config(cfg):
-    """Merge the main MetaDrive config with eval-specific overrides."""
+def get_evaluation_config(cfg, split="test"):
+    """Return settings for validation or the held-out test split.
+
+    Older saved runs used an ``eval`` section. Keeping that fallback lets us
+    audit those models without editing their immutable resolved configs.
+    """
+    if split not in {"train", "validation", "test"}:
+        raise ValueError(
+            f"Unknown evaluation split {split!r}; use 'train', 'validation', or 'test'."
+        )
+    if split == "train":
+        evaluation = copy.deepcopy(cfg.get("metadrive", {}))
+        evaluation["random_traffic"] = False
+        evaluation["random_spawn_lane_index"] = False
+        evaluation.setdefault("episodes", int(evaluation.get("num_scenarios", 1)))
+        evaluation.setdefault("deterministic", True)
+        evaluation.setdefault("progress", True)
+        evaluation.setdefault("vec_env", "subproc")
+        return evaluation
+    evaluation = copy.deepcopy(cfg.get("eval", {}))
+    if split in cfg:
+        evaluation.update(copy.deepcopy(cfg[split]))
+    return evaluation
+
+
+def make_eval_metadrive_config(cfg, split="test"):
+    """Merge MetaDrive settings with one deterministic evaluation split."""
     env_cfg = copy.deepcopy(cfg.get("metadrive", {}))
-    eval_cfg = cfg.get("eval", {})
-    for key in ["start_seed", "num_scenarios", "traffic_density", "horizon"]:
+    eval_cfg = get_evaluation_config(cfg, split)
+    override_keys = [
+        "start_seed",
+        "num_scenarios",
+        "traffic_density",
+        "random_traffic",
+        "random_spawn_lane_index",
+        "horizon",
+        "map",
+    ]
+    for key in override_keys:
         if key in eval_cfg:
             env_cfg[key] = eval_cfg[key]
     env_cfg["use_render"] = False
     env_cfg.setdefault("log_level", 50)
+    if "random_traffic" not in eval_cfg:
+        env_cfg["random_traffic"] = False
+    if "random_spawn_lane_index" not in eval_cfg:
+        env_cfg["random_spawn_lane_index"] = False
     return env_cfg

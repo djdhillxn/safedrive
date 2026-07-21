@@ -37,8 +37,9 @@
 \begin{abstract}
 SafeRL-Drive is a reproducible closed-loop autonomous-driving benchmark built with
 MetaDrive and Stable-Baselines3. The Phase-1 study trains continuous-control PPO and
-SAC agents on procedurally generated roads, evaluates them on a disjoint unseen seed
-range, and compares them with MetaDrive's rule-based IDM policy. The benchmark records
+SAC agents on procedurally generated roads, selects checkpoints on a fixed validation
+range, evaluates frozen policies on a disjoint held-out test range, and compares them
+with MetaDrive's rule-based IDM policy. The benchmark records
 success, collision, off-road, timeout, route-completion, return, cost, speed, and episode
 length metrics while retaining the configurations, logs, models, and plots needed to
 reproduce each result. Numerical results in this scaffold are intentionally left as
@@ -55,9 +56,10 @@ this study \cite{li2022metadrive}.
 
 \section{Problem Setup}
 The agent receives MetaDrive's vector observation and produces continuous steering and
-throttle/brake commands. Training scenarios begin at seed 0. Final evaluation uses a
-disjoint scenario range beginning at seed 1000. Each reported method is evaluated for 50
-episodes by default, with one scenario seed assigned per episode.
+throttle/brake commands. Training scenarios begin at seed 0. Validation scenarios begin
+at seed 1000 and are used only for checkpoint selection. Final evaluation begins at seed
+2000 and uses 100 held-out scenarios, with one scenario seed assigned per episode.
+Validation and test traffic are fixed; training retains randomized traffic for diversity.
 
 \section{Environment and Agents}
 The learning agents are Proximal Policy Optimization (PPO) \cite{schulman2017ppo} and
@@ -68,17 +70,18 @@ one environment to keep replay-buffer behavior straightforward. MetaDrive's
 
 \section{Experimental Design}
 Each learning algorithm is trained once for 500,000 environment timesteps by default.
-The training script saves the final model, the best validation checkpoint, observation
-normalization statistics, monitor data, periodic checkpoints, and a post-training unseen
-evaluation. The best models receive a separate 50-episode evaluation before comparison.
+The training script saves the final model, periodic checkpoints with matching observation
+normalization statistics, training diagnostics, and a best validation checkpoint. That
+checkpoint is selected first by success rate, then by route completion and lower failure
+rates. Only the frozen winner receives the held-out test evaluation used for comparison.
 The smoke test verifies installation and wiring but is excluded from the reported results.
 
 \section{Metrics}
 The headline metrics are success rate, collision rate, off-road rate, timeout rate, and
 mean route completion. Mean return and episode length summarize task performance and
-rollout duration. Mean safety cost and speed provide additional context. Per-episode CSV
-files retain scenario seeds and final simulator information so aggregate values remain
-auditable.
+rollout duration. Mean safety cost and speed provide additional context. Success rate is
+accompanied by a 95\% Wilson confidence interval. Per-episode CSV files retain scenario
+seeds and final simulator information so aggregate values remain auditable.
 
 \section{Results}
 Table~\ref{tab:phase1-results} is filled manually from
@@ -86,7 +89,7 @@ Table~\ref{tab:phase1-results} is filled manually from
 
 \begin{table}[h]
   \centering
-  \caption{Performance on unseen procedural scenarios.}
+  \caption{Performance on held-out procedural test scenarios.}
   \label{tab:phase1-results}
   \begin{tabular}{lcccc}
     \toprule
@@ -108,7 +111,7 @@ Table~\ref{tab:phase1-results} is filled manually from
       \includegraphics[width=0.92\linewidth]{../runs/phase1_comparison.png}
     }{\missingfigure}
   }
-  \caption{IDM, PPO, and SAC on the four headline unseen-scenario metrics.}
+  \caption{IDM, PPO, and SAC on the four headline held-out test metrics.}
   \label{fig:phase1-comparison}
 \end{figure}
 
@@ -125,7 +128,7 @@ benchmark rather than broad statistical superiority. Seed sweeps, richer observa
 and explicit safety mechanisms are deferred until this focused benchmark is complete.
 
 \section{Conclusion}
-SafeRL-Drive connects training, unseen-scenario evaluation, rule-based comparison,
+SafeRL-Drive connects training, held-out scenario evaluation, rule-based comparison,
 visualization, video, and artifact logging in one reproducible MetaDrive workflow. The
 final report will replace the placeholders with measured PPO, SAC, and IDM results from
 the saved Phase-1 comparison files.

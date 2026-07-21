@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from tqdm import trange
 
-from saferl_drive.utils import json_text, write_json
+from saferl_drive.utils import json_text, set_global_seeds, write_json
 
 
 SUCCESS_KEYS = ("success", "arrive_dest", "arrive_destination", "arrived_dest")
@@ -51,10 +51,12 @@ def _safe_int(info, keys, default=-1):
 
 
 def _speed_km_h(info):
-    direct = _safe_float(info, ("mean_speed_km_h", "speed_km_h"))
+    # MetaDrive reports ``velocity`` in km/h. Generic ``speed`` fields are
+    # treated as m/s so adapters for other Gymnasium environments still work.
+    direct = _safe_float(info, ("mean_speed_km_h", "speed_km_h", "velocity"))
     if not np.isnan(direct):
         return direct
-    speed_m_s = _safe_float(info, ("speed", "velocity"))
+    speed_m_s = _safe_float(info, ("speed_m_s", "speed"))
     if np.isnan(speed_m_s):
         return np.nan
     return speed_m_s * 3.6
@@ -118,6 +120,7 @@ def evaluate_policy_closed_loop(
         if requested_seed is None:
             observation, info = env.reset()
         else:
+            set_global_seeds(requested_seed)
             observation, info = env.reset(seed=requested_seed)
         done = False
         return_sum = 0.0
@@ -177,6 +180,7 @@ def evaluate_policy_vecenv(
     for episode in iterator:
         requested_seed = _episode_seed(start_seed, num_scenarios, episode)
         if requested_seed is not None:
+            set_global_seeds(requested_seed)
             venv.seed(requested_seed)
         observation = venv.reset()
         done = False
@@ -220,16 +224,35 @@ def evaluate_policy_vecenv(
     return pd.DataFrame(rows)
 
 
+def _wilson_interval(successes, episodes):
+    """Return a 95% Wilson interval for a binomial success rate."""
+    if episodes <= 0:
+        return np.nan, np.nan
+    z = 1.959963984540054
+    rate = successes / episodes
+    denominator = 1.0 + z * z / episodes
+    center = (rate + z * z / (2.0 * episodes)) / denominator
+    margin = z * np.sqrt(
+        rate * (1.0 - rate) / episodes + z * z / (4.0 * episodes * episodes)
+    ) / denominator
+    return float(center - margin), float(center + margin)
+
+
 def summarize_metrics(frame):
     """Aggregate per-episode metrics into report-ready numbers."""
     if frame.empty:
         return {}
+    episodes = int(len(frame))
+    successes = int(frame["success"].sum())
+    success_low, success_high = _wilson_interval(successes, episodes)
     summary = {
-        "episodes": int(len(frame)),
+        "episodes": episodes,
         "mean_return": float(frame["return_sum"].mean()),
         "std_return": float(frame["return_sum"].std(ddof=0)),
         "mean_length": float(frame["length"].mean()),
         "success_rate": float(frame["success"].mean()),
+        "success_rate_95ci_low": success_low,
+        "success_rate_95ci_high": success_high,
         "collision_rate": float(frame["crash"].mean()),
         "out_of_road_rate": float(frame["out_of_road"].mean()),
         "timeout_or_max_step_rate": float(frame["max_step"].mean()),
@@ -241,6 +264,18 @@ def summarize_metrics(frame):
     return summary
 
 
+def checkpoint_selection_score(summary):
+    """Rank validation checkpoints by task success, then useful safe progress."""
+    return (
+        float(summary.get("success_rate", 0.0)),
+        float(summary.get("mean_route_completion", 0.0)),
+        -float(summary.get("out_of_road_rate", 1.0)),
+        -float(summary.get("collision_rate", 1.0)),
+        -float(summary.get("timeout_or_max_step_rate", 1.0)),
+        float(summary.get("mean_return", float("-inf"))),
+    )
+
+
 def comparison_summary_row(name, summary, run_dir=None, summary_path=None):
     """Return one stable row for Phase-1 CSV, JSON, and plotting."""
     metric_names = [
@@ -249,6 +284,8 @@ def comparison_summary_row(name, summary, run_dir=None, summary_path=None):
         "std_return",
         "mean_length",
         "success_rate",
+        "success_rate_95ci_low",
+        "success_rate_95ci_high",
         "collision_rate",
         "out_of_road_rate",
         "timeout_or_max_step_rate",

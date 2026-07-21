@@ -8,9 +8,14 @@ import numpy as np
 from stable_baselines3.common.vec_env import VecNormalize
 
 from saferl_drive.algorithms import get_algorithm_class
-from saferl_drive.config import apply_dotlist_overrides, load_yaml, make_eval_metadrive_config
+from saferl_drive.config import (
+    apply_dotlist_overrides,
+    get_evaluation_config,
+    load_yaml,
+    make_eval_metadrive_config,
+)
 from saferl_drive.envs import find_vecnormalize_path, make_vec_env
-from saferl_drive.utils import log_system_info, setup_logging
+from saferl_drive.utils import log_system_info, set_global_seeds, setup_logging, write_json
 
 
 def parse_args():
@@ -18,6 +23,8 @@ def parse_args():
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--model", default="final", choices=["final", "best"])
     parser.add_argument("--steps", type=int, default=1000)
+    parser.add_argument("--seed", type=int, default=None, help="Scenario seed to record.")
+    parser.add_argument("--device", default=None, help="SB3 load device override.")
     parser.add_argument("--fps", type=int, default=20)
     parser.add_argument("--output", default=None)
     parser.add_argument("--screen-size", type=int, default=800)
@@ -69,14 +76,22 @@ def main():
         if not model_path.exists():
             raise FileNotFoundError(f"Model not found: {model_path}")
 
-        environment_config = make_eval_metadrive_config(config)
+        testing = get_evaluation_config(config, "test")
+        video_seed = args.seed
+        if video_seed is None:
+            video_seed = int(testing.get("start_seed", 2000))
+        set_global_seeds(video_seed)
+
+        environment_config = make_eval_metadrive_config(config, "test")
+        environment_config["start_seed"] = video_seed
         environment_config["num_scenarios"] = 1
+        environment_config["random_traffic"] = False
+        environment_config["random_spawn_lane_index"] = False
         environment_config["use_render"] = False
-        start_seed = int(config.get("eval", {}).get("start_seed", 1000))
         base_env = make_vec_env(
             env_config=environment_config,
             n_envs=1,
-            seed=start_seed,
+            seed=video_seed,
             monitor_dir=run_dir / "logs" / f"video_{selected_model}_monitor",
             vec_env_type="dummy",
             normalize_obs=False,
@@ -96,10 +111,20 @@ def main():
                     "final normalization statistics."
                 )
 
-        logger.info("Loading %s model: %s", selected_model, model_path)
-        model = algorithm_class.load(model_path, env=environment)
+        configured_device = config.get("algorithm", {}).get("kwargs", {}).get("device")
+        load_device = args.device or configured_device or ("cpu" if algorithm_name == "ppo" else "auto")
+        logger.info(
+            "Loading %s model on %s for deterministic scenario seed %s: %s",
+            selected_model,
+            load_device,
+            video_seed,
+            model_path,
+        )
+        model = algorithm_class.load(model_path, env=environment, device=load_device)
+        environment.seed(video_seed)
         observation = environment.reset()
         frames = []
+        final_info = {}
         for _ in range(args.steps):
             rendered = environment.env_method(
                 "render",
@@ -111,15 +136,10 @@ def main():
                 frames.append(_to_uint8_frame(rendered))
             action, _ = model.predict(observation, deterministic=True)
             observation, rewards, dones, infos = environment.step(action)
+            final_info = dict(infos[0])
             if bool(dones[0]):
-                rendered = environment.env_method(
-                    "render",
-                    mode="topdown",
-                    window=False,
-                    screen_size=(args.screen_size, args.screen_size),
-                )[0]
-                if rendered is not None:
-                    frames.append(_to_uint8_frame(rendered))
+                # VecEnv resets automatically at termination, so another render here
+                # would append the first frame of a new episode to this video.
                 break
 
         if not frames:
@@ -130,10 +150,32 @@ def main():
         output = (
             Path(args.output)
             if args.output
-            else run_dir / "videos" / f"{algorithm_name}_{selected_model}_topdown.mp4"
+            else run_dir
+            / "videos"
+            / f"{algorithm_name}_{selected_model}_seed{video_seed}_topdown.mp4"
         )
         output.parent.mkdir(parents=True, exist_ok=True)
         imageio.mimsave(output, frames, fps=args.fps)
+        write_json(
+            {
+                "algorithm": algorithm_name,
+                "model": selected_model,
+                "scenario_seed": video_seed,
+                "deterministic_policy": True,
+                "random_traffic": False,
+                "frames": len(frames),
+                "fps": args.fps,
+                "video": str(output),
+                "final_outcome": {
+                    "success": bool(final_info.get("arrive_dest", False)),
+                    "crash": bool(final_info.get("crash", False)),
+                    "out_of_road": bool(final_info.get("out_of_road", False)),
+                    "max_step": bool(final_info.get("max_step", False)),
+                    "route_completion": float(final_info.get("route_completion", 0.0)),
+                },
+            },
+            output.with_suffix(".json"),
+        )
         logger.debug("Recorded %s frames at %s FPS.", len(frames), args.fps)
         logger.info("Saved video: %s", output)
     except Exception:

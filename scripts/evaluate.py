@@ -1,4 +1,4 @@
-"""Evaluate a trained PPO/SAC model on unseen MetaDrive scenarios."""
+"""Evaluate a trained PPO/SAC model on a configured MetaDrive split."""
 
 import argparse
 from pathlib import Path
@@ -6,18 +6,39 @@ from pathlib import Path
 from stable_baselines3.common.vec_env import VecNormalize
 
 from saferl_drive.algorithms import get_algorithm_class
-from saferl_drive.config import apply_dotlist_overrides, load_yaml, make_eval_metadrive_config
+from saferl_drive.config import (
+    apply_dotlist_overrides,
+    get_evaluation_config,
+    load_yaml,
+    make_eval_metadrive_config,
+)
 from saferl_drive.envs import find_vecnormalize_path, make_vec_env
 from saferl_drive.evaluation import evaluate_policy_vecenv, save_eval_outputs
-from saferl_drive.utils import log_system_info, plot_eval_summary, setup_logging
+from saferl_drive.utils import (
+    append_phase1_manifest,
+    log_system_info,
+    plot_eval_summary,
+    read_json,
+    set_global_seeds,
+    setup_logging,
+    utc_timestamp,
+    write_json,
+)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate a trained MetaDrive policy.")
     parser.add_argument("--run-dir", required=True, help="Run directory produced by scripts.train.")
     parser.add_argument("--model", default="final", choices=["final", "best"])
+    parser.add_argument("--split", default="test", choices=["train", "validation", "test"])
     parser.add_argument("--episodes", type=int, default=None)
-    parser.add_argument("--prefix", default="eval_unseen", help="Output filename prefix.")
+    parser.add_argument("--device", default=None, help="SB3 load device override, such as cpu or auto.")
+    parser.add_argument("--prefix", default=None, help="Output filename prefix.")
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Allow replacement of an existing evaluation with the same prefix.",
+    )
     parser.add_argument("overrides", nargs="*", help="Dotlist config overrides.")
     return parser.parse_args()
 
@@ -25,14 +46,13 @@ def parse_args():
 def main():
     args = parse_args()
     run_dir = Path(args.run_dir)
+    prefix = args.prefix or f"{args.model}_{args.split}"
     config = load_yaml(run_dir / "resolved_config.yaml")
     config = apply_dotlist_overrides(config, args.overrides)
-    if args.episodes is not None:
-        config.setdefault("eval", {})["episodes"] = args.episodes
 
     logging_config = config.get("logging", {})
     logger = setup_logging(
-        run_dir / "logs" / f"{args.prefix}.log",
+        run_dir / "logs" / f"{prefix}.log",
         console_level=logging_config.get("console_level", "INFO"),
         file_level=logging_config.get("file_level", "DEBUG"),
     )
@@ -42,6 +62,12 @@ def main():
         log_system_info(logger, run_dir=run_dir)
         logger.debug("Arguments: %s", vars(args))
         logger.debug("Resolved evaluation config: %s", config)
+        summary_path = run_dir / "eval" / f"{prefix}_summary.json"
+        if summary_path.exists() and not args.overwrite:
+            raise FileExistsError(
+                f"Evaluation already exists: {summary_path}. Use a new --prefix or "
+                "pass --overwrite intentionally."
+            )
 
         algorithm_name = config.get("algorithm", {}).get("name", "ppo").lower()
         algorithm_class = get_algorithm_class(algorithm_name)
@@ -50,17 +76,20 @@ def main():
         if not model_path.exists():
             raise FileNotFoundError(
                 f"Requested {args.model} model not found: {model_path}. "
-                "Use --model final if the EvalCallback did not create a best model."
+                "Use --model final if validation did not create a best model."
             )
 
-        evaluation = config.get("eval", {})
-        start_seed = int(evaluation.get("start_seed", 1000))
+        evaluation = get_evaluation_config(config, args.split)
+        default_seeds = {"train": 0, "validation": 1000, "test": 2000}
+        default_seed = default_seeds[args.split]
+        start_seed = int(evaluation.get("start_seed", default_seed))
+        set_global_seeds(start_seed)
         base_env = make_vec_env(
-            env_config=make_eval_metadrive_config(config),
+            env_config=make_eval_metadrive_config(config, args.split),
             n_envs=1,
             seed=start_seed,
-            monitor_dir=run_dir / "logs" / f"{args.prefix}_monitor",
-            vec_env_type="dummy",
+            monitor_dir=run_dir / "logs" / f"{prefix}_monitor",
+            vec_env_type=evaluation.get("vec_env", "subproc"),
             normalize_obs=False,
             normalize_reward=False,
             training=False,
@@ -80,12 +109,15 @@ def main():
         else:
             logger.debug("No VecNormalize statistics found; using raw observations.")
 
-        logger.info("Loading %s model: %s", args.model, model_path)
-        model = algorithm_class.load(model_path, env=environment)
-        episode_count = int(evaluation.get("episodes", 50))
+        configured_device = config.get("algorithm", {}).get("kwargs", {}).get("device")
+        load_device = args.device or configured_device or ("cpu" if algorithm_name == "ppo" else "auto")
+        logger.info("Loading %s model on %s: %s", args.model, load_device, model_path)
+        model = algorithm_class.load(model_path, env=environment, device=load_device)
+        episode_count = int(args.episodes or evaluation.get("episodes", 50))
         logger.info(
-            "Evaluating %s episodes on unseen seeds beginning at %s.",
+            "Evaluating %s episodes on the %s split beginning at seed %s.",
             episode_count,
+            args.split,
             start_seed,
         )
         frame = evaluate_policy_vecenv(
@@ -97,8 +129,41 @@ def main():
             start_seed=start_seed,
             num_scenarios=int(evaluation.get("num_scenarios", episode_count)),
         )
-        paths = save_eval_outputs(frame, run_dir / "eval", prefix=args.prefix)
+        paths = save_eval_outputs(frame, run_dir / "eval", prefix=prefix)
         plot_paths = plot_eval_summary(paths["episodes_csv"], run_dir / "plots")
+        if args.split == "test":
+            metadata_path = run_dir / "run_metadata.json"
+            if metadata_path.exists():
+                metadata = read_json(metadata_path)
+                metadata.setdefault("test", {}).update(
+                    {
+                        "status": "complete",
+                        "completed_at_utc": utc_timestamp(),
+                        "model": args.model,
+                        "episodes": episode_count,
+                        "start_seed": start_seed,
+                        "num_scenarios": int(
+                            evaluation.get("num_scenarios", episode_count)
+                        ),
+                        "prefix": prefix,
+                    }
+                )
+                metadata.setdefault("outputs", {})["test_eval_csv"] = str(
+                    paths["episodes_csv"]
+                )
+                metadata["outputs"]["test_eval_summary"] = str(paths["summary_json"])
+                write_json(metadata, metadata_path)
+                experiment = config.get("experiment", {})
+                append_phase1_manifest(
+                    experiment.get("output_dir", "runs"),
+                    {
+                        "kind": experiment.get("latest_name", algorithm_name),
+                        "algorithm": algorithm_name,
+                        "status": "test_complete",
+                        "run_dir": str(run_dir),
+                        "summary": str(paths["summary_json"]),
+                    },
+                )
         logger.debug("Evaluation CSV: %s", paths["episodes_csv"])
         logger.debug("Evaluation plots: %s", plot_paths)
         logger.info("Evaluation complete: %s", paths["summary_json"])

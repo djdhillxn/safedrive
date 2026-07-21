@@ -10,7 +10,6 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -305,8 +304,20 @@ def load_monitor_csvs(run_dir):
     return frame
 
 
+def _plotter():
+    """Load Matplotlib with a file-only backend that works in Colab and terminals."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    return plt
+
+
 def plot_training_returns(run_dir, smoothing=20):
     """Plot episode return from Monitor files."""
+    plt = _plotter()
+
     run_dir = Path(run_dir)
     out_path = run_dir / "plots" / "training_returns.png"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -331,6 +342,8 @@ def plot_training_returns(run_dir, smoothing=20):
 
 def plot_eval_summary(eval_csv, out_dir=None):
     """Create simple evaluation plots from per-episode CSV."""
+    plt = _plotter()
+
     eval_csv = Path(eval_csv)
     frame = pd.read_csv(eval_csv)
     if out_dir is None:
@@ -345,7 +358,7 @@ def plot_eval_summary(eval_csv, out_dir=None):
         plt.hist(frame["route_completion"].dropna(), bins=15)
         plt.xlabel("Route completion")
         plt.ylabel("Episodes")
-        plt.title("Unseen-scenario route completion")
+        plt.title("Evaluation route completion")
         plt.tight_layout()
         plt.savefig(path, dpi=180)
         plt.close()
@@ -381,6 +394,8 @@ def plot_eval_summary(eval_csv, out_dir=None):
 
 def plot_comparison_rows(rows, out_path):
     """Plot the four headline Phase-1 metrics for multiple agents."""
+    plt = _plotter()
+
     frame = pd.DataFrame(rows)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -415,7 +430,7 @@ def plot_comparison_rows(rows, out_path):
     plt.xticks(positions, [labels[metric] for metric in metrics])
     plt.ylim(0, 1)
     plt.ylabel("Rate / fraction")
-    plt.title("Phase-1 unseen-scenario comparison")
+    plt.title("Phase-1 held-out test comparison")
     plt.legend()
     plt.tight_layout()
     plt.savefig(out_path, dpi=180)
@@ -436,6 +451,8 @@ def compare_eval_summaries(summary_paths, out_path):
 
 def plot_phase1_training_returns(run_dirs, out_path, smoothing=20):
     """Create one optional training-return plot for PPO and SAC."""
+    plt = _plotter()
+
     plotted = False
     plt.figure(figsize=(9, 5))
     for name, run_dir in run_dirs.items():

@@ -42,9 +42,15 @@ def main():
             logger.warning("Training-return plot skipped: %s", error)
             logger.debug("Training-return plot exception", exc_info=True)
 
-        eval_csv = (
-            Path(args.eval_csv) if args.eval_csv else run_dir / "eval" / "final_unseen_episodes.csv"
-        )
+        if args.eval_csv:
+            eval_csv = Path(args.eval_csv)
+        else:
+            candidates = [
+                run_dir / "eval" / "best_test_episodes.csv",
+                run_dir / "eval" / "final_test_episodes.csv",
+                run_dir / "eval" / "final_unseen_episodes.csv",
+            ]
+            eval_csv = next((path for path in candidates if path.exists()), candidates[0])
         if eval_csv.exists():
             paths.extend(plot_eval_summary(eval_csv, out_dir=run_dir / "plots"))
         else:

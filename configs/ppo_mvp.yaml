@@ -13,9 +13,9 @@ train:
   progress_bar: true
   normalize_obs: true
   normalize_reward: false
-  checkpoint_freq: 100000
+  checkpoint_freq: 50000
+  diagnostic_freq: 10000
   eval_freq: 50000
-  eval_episodes: 20
 
 algorithm:
   name: ppo
@@ -66,12 +66,26 @@ metadrive:
   crash_object_done: true
   accident_prob: 0.0
 
-eval:
-  # Unseen seeds: intentionally disjoint from training seeds [0, 49].
+validation:
+  # Fixed seeds used only for checkpoint selection.
   start_seed: 1000
   num_scenarios: 50
   traffic_density: 0.10
-  episodes: 50
+  random_traffic: false
+  random_spawn_lane_index: false
+  episodes: 20
+  deterministic: true
+  progress: false
+  vec_env: subproc
+
+test:
+  # Held-out seeds are evaluated once after the best checkpoint is frozen.
+  start_seed: 2000
+  num_scenarios: 100
+  traffic_density: 0.10
+  random_traffic: false
+  random_spawn_lane_index: false
+  episodes: 100
   deterministic: true
   progress: true
   vec_env: subproc

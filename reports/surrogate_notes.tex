@@ -16,13 +16,86 @@ This document is the detailed internal companion to \texttt{main.tex}. It is int
 experiment bookkeeping, future Codex context, failed attempts, and decisions that would
 be distracting in the portfolio report. Update it after each substantial Colab session.
 
+\section{2026-07-21 diagnosis and Priority-0 correction}
+The latest imported artifacts were:
+\begin{itemize}
+  \item IDM: \texttt{20260721\_023109\_idm\_baseline\_seed0};
+  \item PPO: \texttt{20260721\_023556\_ppo\_mvp\_ppo\_seed0};
+  \item SAC: \texttt{20260721\_032424\_sac\_mvp\_sac\_seed0}.
+\end{itemize}
+
+The best PPO checkpoint achieved 16\% success, 12\% collision, 54\% off-road,
+18\% timeout, and 59.8\% mean route completion on the old 50-episode evaluation.
+This is a meaningful improvement over the earlier 2\% PPO result, but road departure
+remains the dominant failure. PPO training diagnostics were numerically healthy; its
+validation reward peaked near 300,000 steps and later updates did not reliably improve
+task success. The previous Stable-Baselines3 callback selected checkpoints by mean reward,
+which was not aligned with the headline success metric.
+
+SAC did produce complete artifacts, but the policy collapsed. Its best old evaluation had
+0\% success, 14\% off-road, 86\% timeout, and 17.5\% route completion. The final model had
+0\% success, 98\% timeout, and only 1.1\% route completion. The learned entropy coefficient
+was approximately 0.014 at 150,000 steps, 0.211 at 300,000, 3.14 at 400,000, and 13.24 at
+500,000. Critic loss rose from less than 1 around 150,000 steps to hundreds at 300,000 and
+millions near 400,000. Actor-loss magnitude grew past 11,000. The synchronized optimizer,
+entropy, and evaluation collapse indicates unstable value learning rather than a missing
+output or a GPU-recording failure. The final policy mostly braked or used saturated actions,
+making late timeout a low-immediate-cost failure mode.
+
+Three measurement defects were found. First, MetaDrive's \texttt{info["velocity"]} is
+already in km/h, but the evaluator multiplied it by 3.6; every legacy mean-speed result is
+therefore inflated and must not be quoted. Second, repeated IDM evaluations over nominally
+identical seeds produced 42\%, 30\%, and 50\% success because evaluation inherited random
+traffic and did not seed every relevant random generator consistently. Third, seeds
+1000--1049 were used for both checkpoint selection and final reporting, making them a
+validation set rather than an untouched test set.
+
+Priority 0 corrects these issues as follows:
+\begin{itemize}
+  \item training uses seeds beginning at 0 and keeps randomized traffic;
+  \item deterministic validation uses seeds 1000--1049;
+  \item deterministic held-out testing uses seeds 2000--2099 and runs only after the
+        validation winner is frozen;
+  \item the best checkpoint is ranked by success, then route completion, lower off-road,
+        collision and timeout rates, and finally mean return;
+  \item checkpoint normalization statistics are saved every 50,000 steps and beside the
+        best model;
+  \item training outcomes and PPO/SAC optimizer diagnostics are saved to
+        \texttt{training\_diagnostics.json};
+  \item success summaries include a 95\% Wilson interval;
+  \item video recording explicitly sets the configured scenario seed immediately before
+        reset and writes the seed and final outcome beside the MP4.
+\end{itemize}
+
+The old results remain useful diagnostic evidence, but are not final Phase-1 benchmark
+numbers because their traffic realizations were not paired, their test seeds were reused
+for model selection, and their speed field had the unit error.
+
+The corrected local Priority-0 validation backfill used fixed traffic on seeds
+1000--1019. PPO achieved 5\% success (95\% Wilson interval 0.9--23.6\%), 15\%
+collision, 65\% off-road, 15\% timeout, and 47.1\% mean route completion. SAC
+achieved 0\% success (95\% Wilson interval 0--16.1\%), 0\% collision, 20\%
+off-road, 80\% timeout, and 14.2\% mean route completion. Corrected mean speeds
+were 6.36 km/h for PPO and 1.25 km/h for SAC. These 20-episode validation results
+confirm the qualitative diagnosis: PPO makes useful progress but usually leaves the
+road, whereas SAC mostly stalls. They are diagnostic results, not held-out test claims.
+
+The reproducibility gate then evaluated IDM twice in fresh worker environments on
+seeds 1000--1009. All per-seed categorical outcomes matched exactly. Mean return
+differed by 0.584 against an allowed 7.816, mean length by 0.5 against 11.044,
+route completion by 0.00055 against 0.01, and mean speed by 0.00053 km/h against
+0.254. The gate therefore passed. The first 10-episode pass had 40\% success and
+is retained only as gate evidence, not as the final IDM benchmark.
+
 \section{Canonical experiment order}
 \begin{enumerate}
   \item Run the smoke test; do not use it as a report result.
-  \item Evaluate the MetaDrive IDM baseline on 50 unseen scenarios.
+  \item Verify reproducible evaluation by running IDM twice on the same 10 validation seeds,
+        requiring identical categorical outcomes and near-identical aggregate metrics.
   \item Train PPO and save its complete run directory.
   \item Train SAC and save its complete run directory.
-  \item Evaluate both best models on 50 unseen scenarios.
+  \item After both configurations are frozen, evaluate IDM and each validation winner
+        once on the same 100 held-out test scenarios.
   \item Record one top-down rollout per learned agent.
   \item Generate the IDM--PPO--SAC comparison.
   \item Fill the report placeholders and compile \texttt{main.tex}.
@@ -33,15 +106,23 @@ Run from the repository root:
 \begin{verbatim}
 python -m scripts.train --config configs/smoke_test.yaml
 python -m scripts.evaluate_baseline --config configs/ppo_mvp.yaml \
-  --episodes 50 --prefix idm_unseen
+  --split validation --episodes 10 --prefix idm_repro --verify-repeat
 python -m scripts.train --config configs/ppo_mvp.yaml
 python -m scripts.train --config configs/sac_mvp.yaml
 python -m scripts.evaluate --run-dir <PPO_RUN> --model best \
-  --episodes 50 --prefix best_unseen
+  --split train --episodes 50 --prefix best_train_diagnostic
 python -m scripts.evaluate --run-dir <SAC_RUN> --model best \
-  --episodes 50 --prefix best_unseen
-python -m scripts.record_video --run-dir <PPO_RUN> --model best --steps 1000
-python -m scripts.record_video --run-dir <SAC_RUN> --model best --steps 1000
+  --split train --episodes 50 --prefix best_train_diagnostic
+python -m scripts.evaluate_baseline --config configs/ppo_mvp.yaml \
+  --split test --episodes 100 --prefix idm_test
+python -m scripts.evaluate --run-dir <PPO_RUN> --model best \
+  --split test --episodes 100 --prefix best_test
+python -m scripts.evaluate --run-dir <SAC_RUN> --model best \
+  --split test --episodes 100 --prefix best_test
+python -m scripts.record_video --run-dir <PPO_RUN> --model best \
+  --seed <DISCLOSED_SUCCESSFUL_TEST_SEED> --steps 1000
+python -m scripts.record_video --run-dir <SAC_RUN> --model best \
+  --seed <DISCLOSED_SUCCESSFUL_TEST_SEED> --steps 1000
 python -m scripts.compare_runs --phase1
 latexmk -pdf -interaction=nonstopmode -halt-on-error reports/main.tex
 \end{verbatim}
@@ -57,8 +138,9 @@ latexmk -pdf -interaction=nonstopmode -halt-on-error reports/main.tex
   Vector environments & 4 subprocess & 1 dummy \\
   Observation normalization & Yes & Yes \\
   Training start seed & 0 & 0 \\
-  Evaluation start seed & 1000 & 1000 \\
-  Evaluation episodes & 50 & 50 \\
+  Validation start seed & 1000 & 1000 \\
+  Held-out test start seed & 2000 & 2000 \\
+  Held-out test episodes & 100 & 100 \\
   \bottomrule
 \end{tabular}
 
@@ -80,15 +162,21 @@ Record the following from each long run's \texttt{logs/train.log} and
 
 \section{Observed results}
 \begin{itemize}
-  \item Initial IDM run (50 unseen episodes, original reward config): 42\% success,
-        40\% collision, 16\% off-road, 68.2\% mean route completion, and 27.0 km/h
-        mean speed.
+  \item Initial IDM run (50 old evaluation episodes, original reward config): 42\% success,
+        40\% collision, 16\% off-road, and 68.2\% mean route completion. Its legacy speed
+        value was invalid because of the 3.6 multiplier bug.
   \item Initial PPO final model (500,000 steps, original reward config): 2\% success,
-        40\% collision, 60\% off-road, 27.1\% mean route completion, and 31.5 km/h
-        mean speed. Its mean episode length was 195 steps versus IDM's 526, consistent
+        40\% collision, 60\% off-road, and 27.1\% mean route completion. Its legacy speed
+        was invalid. Its mean episode length was 195 steps versus IDM's 526, consistent
         with a faster policy terminating early through collisions or road departure.
-  \item PPO best-model summary: TODO after explicit best-model evaluation.
-  \item SAC best-model summary: TODO
+  \item Latest PPO best-model diagnostic: 16\% success, 12\% collision, 54\% off-road,
+        18\% timeout, and 59.8\% route completion.
+  \item Latest SAC best-model diagnostic: 0\% success, 0\% collision, 14\% off-road,
+        86\% timeout, and 17.5\% route completion.
+  \item Priority-0 deterministic PPO validation backfill (20 episodes): 5\% success,
+        15\% collision, 65\% off-road, 15\% timeout, and 47.1\% route completion.
+  \item Priority-0 deterministic SAC validation backfill (20 episodes): 0\% success,
+        0\% collision, 20\% off-road, 80\% timeout, and 14.2\% route completion.
   \item Initial interpretation: the original reward used weak terminal penalties and no
         lateral lane-centering factor. This could reward rapid forward progress before a
         failure. The revised config aligns terminal and lane-keeping incentives more closely
@@ -101,10 +189,17 @@ Record the following from each long run's \texttt{logs/train.log} and
   \item The repository is public, so Colab cloning should not use a personal access token.
   \item Colab may include the obsolete \texttt{gym} distribution. The notebooks remove it
         before installing SafeDrive, which uses Gymnasium.
-  \item Evaluation must reset within the configured unseen seed range beginning at 1000.
+  \item Each reset seed must remain inside its configured range: validation begins at
+        1000 and held-out testing begins at 2000.
   \item The initial smoke and SAC runs failed because training and callback evaluation both
         created MetaDrive's process-global engine in one Python process. Callback evaluation
         now uses a one-worker \texttt{SubprocVecEnv}.
+  \item The first video attempt failed with
+        \texttt{scenario\_index (seed) should be in [1000:1001)} because the vector
+        environment reset without receiving seed 1000. The recorder now narrows the
+        environment's valid range to the requested seed, seeds all random generators, calls
+        \texttt{environment.seed(video\_seed)} immediately before reset, and loads PPO on
+        its configured CPU device.
   \item Treat \texttt{/content/safedrive} as the live checkout. Mounted Drive is only for
         persistent artifacts because many small Drive-backed file operations are slow.
   \item Add dated notes and complete exception messages here; detailed stack traces remain
@@ -113,7 +208,13 @@ Record the following from each long run's \texttt{logs/train.log} and
 
 \section{Unresolved issues}
 \begin{itemize}
-  \item Final numerical results and report placeholders: TODO after long runs.
+  \item Repeat the already-passing 10-scenario IDM reproducibility gate once in Colab as
+        a runtime smoke check before spending credits on training.
+  \item The imported PPO and SAC checkpoints have now been backfilled on deterministic
+        validation seeds. Do not consume seeds 2000--2099 for these superseded policies;
+        reserve that held-out range for the winners from the next frozen configurations.
+  \item Run the short easy-environment diagnostic pilots before another full run.
+  \item Final numerical results and report placeholders: TODO after corrected long runs.
   \item Whether 1,000,000 timesteps materially improves either agent: optional manual test.
   \item Local macOS versus Colab runtime differences: TODO after both smoke tests.
 \end{itemize}

@@ -31,18 +31,22 @@ def parse_args():
 
 def _preferred_summary(run_dir, name):
     if name == "idm":
-        path = run_dir / "eval" / "idm_unseen_summary.json"
-        if not path.exists():
-            raise FileNotFoundError(f"IDM summary not found: {path}")
-        return path
+        candidates = [
+            run_dir / "eval" / "idm_test_summary.json",
+            run_dir / "eval" / "idm_unseen_summary.json",
+        ]
+    else:
+        candidates = [
+            run_dir / "eval" / "best_test_summary.json",
+            run_dir / "eval" / "final_test_summary.json",
+            run_dir / "eval" / "best_unseen_summary.json",
+            run_dir / "eval" / "final_unseen_summary.json",
+        ]
 
-    best = run_dir / "eval" / "best_unseen_summary.json"
-    final = run_dir / "eval" / "final_unseen_summary.json"
-    if best.exists():
-        return best
-    if final.exists():
-        return final
-    raise FileNotFoundError(f"No best or final unseen summary found under {run_dir / 'eval'}")
+    for path in candidates:
+        if path.exists():
+            return path
+    raise FileNotFoundError(f"No held-out test summary found under {run_dir / 'eval'}")
 
 
 def _run_phase1(args, logger):

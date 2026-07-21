@@ -7,24 +7,30 @@ Examples:
 
 import argparse
 import sys
+from collections import deque
 
 from stable_baselines3.common.callbacks import (
     BaseCallback,
     CallbackList,
     CheckpointCallback,
-    EvalCallback,
 )
-from stable_baselines3.common.vec_env import VecNormalize
+from stable_baselines3.common.vec_env import VecNormalize, sync_envs_normalization
 
 from saferl_drive.algorithms import build_model
 from saferl_drive.config import (
     apply_dotlist_overrides,
+    get_evaluation_config,
     load_yaml,
     make_eval_metadrive_config,
     save_yaml,
 )
 from saferl_drive.envs import make_vec_env
-from saferl_drive.evaluation import evaluate_policy_vecenv, save_eval_outputs
+from saferl_drive.evaluation import (
+    checkpoint_selection_score,
+    evaluate_policy_vecenv,
+    save_eval_outputs,
+    summarize_metrics,
+)
 from saferl_drive.utils import (
     append_phase1_manifest,
     log_system_info,
@@ -66,17 +72,182 @@ def _close_env(environment, logger):
             logger.debug("Environment close failed.", exc_info=True)
 
 
-class _SaveBestVecNormalizeCallback(BaseCallback):
-    """Save observation statistics at the same moment as a new best model."""
+class _TrainingDiagnosticsCallback(BaseCallback):
+    """Persist rolling outcomes and optimizer health in a readable JSON file."""
 
-    def __init__(self, save_path):
+    def __init__(self, output_path, save_freq, window=100):
         super().__init__(verbose=0)
-        self.save_path = save_path
+        self.output_path = output_path
+        self.save_freq = max(int(save_freq), 1)
+        self.outcomes = deque(maxlen=window)
+        self.history = []
+
+    def _record_finished_episodes(self):
+        infos = self.locals.get("infos", [])
+        dones = self.locals.get("dones", [])
+        for index, done in enumerate(dones):
+            if not bool(done) or index >= len(infos):
+                continue
+            info = infos[index]
+            self.outcomes.append(
+                {
+                    "success": bool(info.get("arrive_dest", False)),
+                    "crash": bool(info.get("crash", False)),
+                    "out_of_road": bool(info.get("out_of_road", False)),
+                    "max_step": bool(info.get("max_step", False)),
+                    "route_completion": float(info.get("route_completion", 0.0)),
+                }
+            )
+
+    def _rolling_mean(self, key):
+        if not self.outcomes:
+            return None
+        return sum(float(item[key]) for item in self.outcomes) / len(self.outcomes)
 
     def _on_step(self):
+        self._record_finished_episodes()
+        if self.n_calls % self.save_freq != 0:
+            return True
+
+        row = {"timesteps": int(self.num_timesteps)}
+        logger_values = getattr(self.model.logger, "name_to_value", {})
+        diagnostic_names = [
+            "rollout/ep_rew_mean",
+            "rollout/ep_len_mean",
+            "train/actor_loss",
+            "train/critic_loss",
+            "train/ent_coef",
+            "train/ent_coef_loss",
+            "train/approx_kl",
+            "train/clip_fraction",
+            "train/explained_variance",
+            "train/policy_gradient_loss",
+            "train/value_loss",
+        ]
+        for name in diagnostic_names:
+            if name in logger_values:
+                row[name] = logger_values[name]
+
+        if self.outcomes:
+            rolling = {
+                "episodes": len(self.outcomes),
+                "success_rate": self._rolling_mean("success"),
+                "collision_rate": self._rolling_mean("crash"),
+                "out_of_road_rate": self._rolling_mean("out_of_road"),
+                "timeout_rate": self._rolling_mean("max_step"),
+                "mean_route_completion": self._rolling_mean("route_completion"),
+            }
+            row["rolling_outcomes"] = rolling
+            for name, value in rolling.items():
+                if name != "episodes":
+                    self.logger.record(f"train_outcomes/{name}", value)
+
+        self.history.append(row)
+        write_json({"history": self.history}, self.output_path)
+        return True
+
+
+class _SuccessFirstValidationCallback(BaseCallback):
+    """Evaluate fixed validation seeds and save the best task-success checkpoint."""
+
+    def __init__(
+        self,
+        eval_env,
+        run_dir,
+        eval_freq,
+        episodes,
+        start_seed,
+        num_scenarios,
+        deterministic,
+        run_logger,
+    ):
+        super().__init__(verbose=0)
+        self.eval_env = eval_env
+        self.run_dir = run_dir
+        self.eval_freq = max(int(eval_freq), 1)
+        self.episodes = int(episodes)
+        self.start_seed = int(start_seed)
+        self.num_scenarios = int(num_scenarios)
+        self.deterministic = bool(deterministic)
+        self.run_logger = run_logger
+        self.best_score = None
+        self.history = []
+
+    def _on_step(self):
+        if self.n_calls % self.eval_freq != 0:
+            return True
+
+        sync_envs_normalization(self.training_env, self.eval_env)
+        frame = evaluate_policy_vecenv(
+            self.model,
+            self.eval_env,
+            episodes=self.episodes,
+            deterministic=self.deterministic,
+            progress=False,
+            start_seed=self.start_seed,
+            num_scenarios=self.num_scenarios,
+        )
+        summary = summarize_metrics(frame)
+        step_prefix = f"validation_{self.num_timesteps:09d}"
+        save_eval_outputs(frame, self.run_dir / "eval", prefix=step_prefix)
+
+        row = {"timesteps": int(self.num_timesteps), **summary}
+        self.history.append(row)
+        write_json(
+            {
+                "selection_order": [
+                    "highest success rate",
+                    "highest route completion",
+                    "lowest off-road rate",
+                    "lowest collision rate",
+                    "lowest timeout rate",
+                    "highest mean return",
+                ],
+                "evaluations": self.history,
+            },
+            self.run_dir / "eval" / "validation_history.json",
+        )
+
+        for name in [
+            "success_rate",
+            "collision_rate",
+            "out_of_road_rate",
+            "timeout_or_max_step_rate",
+            "mean_route_completion",
+            "mean_return",
+        ]:
+            self.logger.record(f"validation/{name}", summary[name])
+
+        score = checkpoint_selection_score(summary)
+        is_new_best = self.best_score is None or score > self.best_score
+        self.run_logger.info(
+            "Validation at %s steps: success %.1f%% | route %.1f%% | "
+            "collision %.1f%% | off-road %.1f%% | timeout %.1f%%%s",
+            self.num_timesteps,
+            100.0 * summary["success_rate"],
+            100.0 * summary["mean_route_completion"],
+            100.0 * summary["collision_rate"],
+            100.0 * summary["out_of_road_rate"],
+            100.0 * summary["timeout_or_max_step_rate"],
+            " | new best" if is_new_best else "",
+        )
+        if not is_new_best:
+            return True
+
+        self.best_score = score
+        self.model.save(self.run_dir / "models" / "best_model")
         vecnormalize = self.model.get_vec_normalize_env()
         if vecnormalize is not None:
-            vecnormalize.save(self.save_path)
+            vecnormalize.save(self.run_dir / "models" / "best_vecnormalize.pkl")
+        save_eval_outputs(frame, self.run_dir / "eval", prefix="best_validation")
+        write_json(
+            {
+                "timesteps": int(self.num_timesteps),
+                "score": list(score),
+                "summary": summary,
+            },
+            self.run_dir / "eval" / "best_checkpoint_selection.json",
+        )
         return True
 
 
@@ -101,7 +272,8 @@ def main():
     experiment = config.get("experiment", {})
     training = config.get("train", {})
     algorithm = config.get("algorithm", {})
-    evaluation = config.get("eval", {})
+    validation = get_evaluation_config(config, "validation")
+    testing = get_evaluation_config(config, "test")
     logging_config = config.get("logging", {})
     seed = int(experiment.get("seed", 0))
     algorithm_name = algorithm.get("name", "ppo").lower()
@@ -134,11 +306,17 @@ def main():
             "n_envs": int(training.get("n_envs", 1)),
             "vec_env": training.get("vec_env", "dummy"),
         },
-        "evaluation": {
-            "episodes": int(evaluation.get("episodes", 50)),
-            "start_seed": int(evaluation.get("start_seed", 1000)),
-            "num_scenarios": int(evaluation.get("num_scenarios", 50)),
-            "vec_env": evaluation.get("vec_env", "subproc"),
+        "validation": {
+            "episodes": int(validation.get("episodes", 20)),
+            "start_seed": int(validation.get("start_seed", 1000)),
+            "num_scenarios": int(validation.get("num_scenarios", 50)),
+            "vec_env": validation.get("vec_env", "subproc"),
+        },
+        "test": {
+            "episodes": int(testing.get("episodes", 100)),
+            "start_seed": int(testing.get("start_seed", 2000)),
+            "num_scenarios": int(testing.get("num_scenarios", 100)),
+            "vec_env": testing.get("vec_env", "subproc"),
         },
         "outputs": {},
     }
@@ -164,17 +342,17 @@ def main():
             training=True,
         )
 
-        eval_config = make_eval_metadrive_config(config)
-        eval_start_seed = int(evaluation.get("start_seed", 1000))
-        eval_vec_env_type = evaluation.get("vec_env", "subproc")
+        eval_config = make_eval_metadrive_config(config, "validation")
+        eval_start_seed = int(validation.get("start_seed", 1000))
+        eval_vec_env_type = validation.get("vec_env", "subproc")
         if training.get("vec_env", "dummy") == "dummy" and eval_vec_env_type == "dummy":
             logger.warning(
                 "Training already uses the in-process MetaDrive engine; forcing callback "
                 "evaluation into a subprocess."
             )
             eval_vec_env_type = "subproc"
-        metadata["evaluation"]["vec_env"] = eval_vec_env_type
-        logger.debug("Callback evaluation VecEnv: %s", eval_vec_env_type)
+        metadata["validation"]["vec_env"] = eval_vec_env_type
+        logger.debug("Validation VecEnv: %s", eval_vec_env_type)
         eval_env = make_vec_env(
             env_config=eval_config,
             n_envs=1,
@@ -182,7 +360,7 @@ def main():
             monitor_dir=run_dir / "logs" / "eval_monitor",
             vec_env_type=eval_vec_env_type,
             normalize_obs=bool(training.get("normalize_obs", True)),
-            normalize_reward=bool(training.get("normalize_reward", False)),
+            normalize_reward=False,
             training=False,
         )
 
@@ -225,27 +403,33 @@ def main():
                     save_freq=max(checkpoint_frequency // environment_count, 1),
                     save_path=str(run_dir / "checkpoints"),
                     name_prefix=algorithm_name,
-                    save_replay_buffer=(algorithm_name == "sac"),
+                    # The final SAC replay buffer is saved once below. Copying it at
+                    # every checkpoint is very expensive on mounted Google Drive.
+                    save_replay_buffer=False,
                     save_vecnormalize=True,
                 )
             )
 
+        diagnostic_frequency = int(training.get("diagnostic_freq", 10_000))
+        callbacks.append(
+            _TrainingDiagnosticsCallback(
+                run_dir / "logs" / "training_diagnostics.json",
+                save_freq=max(diagnostic_frequency // environment_count, 1),
+            )
+        )
+
         evaluation_frequency = int(training.get("eval_freq", 50_000))
         if evaluation_frequency > 0:
-            best_vecnormalize_callback = _SaveBestVecNormalizeCallback(
-                run_dir / "models" / "best_vecnormalize.pkl"
-            )
             callbacks.append(
-                EvalCallback(
+                _SuccessFirstValidationCallback(
                     eval_env,
-                    callback_on_new_best=best_vecnormalize_callback,
-                    best_model_save_path=str(run_dir / "models"),
-                    log_path=str(run_dir / "eval" / "sb3_eval"),
+                    run_dir=run_dir,
                     eval_freq=max(evaluation_frequency // environment_count, 1),
-                    n_eval_episodes=int(training.get("eval_episodes", 10)),
-                    deterministic=True,
-                    render=False,
-                    verbose=0,
+                    episodes=int(validation.get("episodes", training.get("eval_episodes", 20))),
+                    start_seed=eval_start_seed,
+                    num_scenarios=int(validation.get("num_scenarios", 50)),
+                    deterministic=bool(validation.get("deterministic", True)),
+                    run_logger=logger,
                 )
             )
 
@@ -281,42 +465,30 @@ def main():
             metadata["outputs"]["replay_buffer"] = str(replay_path)
             logger.debug("Saved SAC replay buffer: %s", replay_path)
 
-        if isinstance(eval_env, VecNormalize) and isinstance(train_env, VecNormalize):
-            eval_env.obs_rms = train_env.obs_rms
-            eval_env.ret_rms = train_env.ret_rms
-            eval_env.training = False
-            eval_env.norm_reward = False
-
-        episode_count = int(evaluation.get("episodes", 50))
+        best_model_path = run_dir / "models" / "best_model.zip"
+        selected_model = "best" if best_model_path.exists() else "final"
+        metadata["outputs"]["selected_model"] = selected_model
+        metadata["test"]["status"] = "pending_explicit_evaluation"
+        validation_csv = run_dir / "eval" / "best_validation_episodes.csv"
+        validation_summary = run_dir / "eval" / "best_validation_summary.json"
+        if validation_summary.exists():
+            metadata["outputs"]["best_validation_summary"] = str(validation_summary)
         logger.info(
-            "Evaluating final model on %s unseen scenarios from seed %s.",
-            episode_count,
-            eval_start_seed,
+            "Training is complete with the %s checkpoint frozen. Run scripts.evaluate "
+            "with --split test only after all experiment configurations are frozen.",
+            selected_model,
         )
-        eval_frame = evaluate_policy_vecenv(
-            model,
-            eval_env,
-            episodes=episode_count,
-            deterministic=bool(evaluation.get("deterministic", True)),
-            progress=bool(evaluation.get("progress", True)),
-            start_seed=eval_start_seed,
-            num_scenarios=int(evaluation.get("num_scenarios", episode_count)),
-        )
-        eval_paths = save_eval_outputs(eval_frame, run_dir / "eval", prefix="final_unseen")
-        metadata["outputs"].update(
-            {
-                "final_eval_csv": str(eval_paths["episodes_csv"]),
-                "final_eval_summary": str(eval_paths["summary_json"]),
-            }
-        )
-        logger.info("Saved unseen evaluation: %s", eval_paths["summary_json"])
 
         try:
             training_plot = plot_training_returns(run_dir)
-            eval_plots = plot_eval_summary(eval_paths["episodes_csv"], run_dir / "plots")
             metadata["outputs"]["training_plot"] = str(training_plot)
-            metadata["outputs"]["evaluation_plots"] = [str(path) for path in eval_plots]
-            logger.debug("Saved plots: %s, %s", training_plot, eval_plots)
+            logger.debug("Saved training plot: %s", training_plot)
+            if validation_csv.exists():
+                validation_plots = plot_eval_summary(validation_csv, run_dir / "plots")
+                metadata["outputs"]["validation_plots"] = [
+                    str(path) for path in validation_plots
+                ]
+                logger.debug("Saved validation plots: %s", validation_plots)
         except Exception as error:
             logger.warning("Plot generation skipped: %s", error)
             logger.debug("Plot generation exception", exc_info=True)
@@ -334,7 +506,7 @@ def main():
                 "algorithm": algorithm_name,
                 "status": "complete",
                 "run_dir": str(run_dir),
-                "summary": str(eval_paths["summary_json"]),
+                "summary": str(validation_summary) if validation_summary.exists() else None,
             },
         )
         logger.debug("Updated latest pointer %s and manifest %s", latest_pointer, manifest_path)

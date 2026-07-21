@@ -14,8 +14,8 @@ train:
   normalize_obs: true
   normalize_reward: false
   checkpoint_freq: 256
+  diagnostic_freq: 128
   eval_freq: 256
-  eval_episodes: 2
 
 algorithm:
   name: ppo
@@ -44,10 +44,23 @@ metadrive:
   discrete_action: false
   accident_prob: 0.0
 
-eval:
+validation:
   start_seed: 100
   num_scenarios: 2
   traffic_density: 0.0
+  random_traffic: false
+  random_spawn_lane_index: false
+  episodes: 2
+  deterministic: true
+  progress: false
+  vec_env: subproc
+
+test:
+  start_seed: 200
+  num_scenarios: 2
+  traffic_density: 0.0
+  random_traffic: false
+  random_spawn_lane_index: false
   episodes: 2
   deterministic: true
   progress: true
