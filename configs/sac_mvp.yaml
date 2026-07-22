@@ -1,5 +1,5 @@
-# Phase-1 SAC baseline for SafeRL-Drive / MetaDrive MVP.
-# SAC is off-policy and usually more sample efficient, but wall-clock behavior depends on hardware.
+# Phase-1 continuous-control SAC benchmark.
+# It intentionally uses the same straight, traffic-free task and metrics as PPO.
 experiment:
   name: sac_mvp
   output_dir: runs
@@ -7,32 +7,38 @@ experiment:
   tensorboard: true
 
 train:
-  total_timesteps: 500000
-  n_envs: 1               # SAC can use VecEnv, but 1 env keeps replay-buffer semantics simple.
+  total_timesteps: 100000
+  n_envs: 1
   vec_env: dummy
   progress_bar: true
   normalize_obs: false
   normalize_reward: false
-  checkpoint_freq: 50000
-  diagnostic_freq: 10000
-  eval_freq: 50000
+  checkpoint_freq: 25000
+  diagnostic_freq: 5000
+  eval_freq: 25000
+  stop_success_rate: 0.80
+  stop_route_completion: 0.90
+  stop_max_collision_rate: 0.10
+  stop_max_out_of_road_rate: 0.10
+  stop_max_timeout_rate: 0.10
+  # Replay buffers are large and are not needed for evaluation or videos.
+  save_replay_buffer: false
 
 algorithm:
   name: sac
   policy: MlpPolicy
   kwargs:
-    # Use CUDA in Colab when available, with an automatic CPU fallback.
     device: auto
-    learning_rate: 0.0001
-    buffer_size: 500000
-    learning_starts: 20000
-    batch_size: 512
+    learning_rate: 0.0003
+    buffer_size: 100000
+    learning_starts: 5000
+    batch_size: 256
     tau: 0.005
     gamma: 0.99
     train_freq: 1
     gradient_steps: 1
-    # The previous learned coefficient grew from 0.01 to 1.36 while the critic
-    # diverged. A small fixed value prevents that runaway feedback loop.
+    # Keep entropy behavior auditable; the steering bound below handles destructive
+    # straight-road exploration rather than relying on temperature tuning alone.
     ent_coef: 0.05
     target_update_interval: 1
     verbose: 0
@@ -42,53 +48,53 @@ algorithm:
 metadrive:
   use_render: false
   log_level: 50
-  map: 3
-  num_scenarios: 500
+  map: S
+  num_scenarios: 1
   start_seed: 0
-  traffic_density: 0.05
-  random_traffic: true
+  traffic_density: 0.0
+  random_traffic: false
   random_spawn_lane_index: false
-  horizon: 1000
-  truncate_as_terminate: true
+  horizon: 500
+  truncate_as_terminate: false
   discrete_action: false
-  success_reward: 100.0
-  out_of_road_penalty: 50.0
-  crash_vehicle_penalty: 50.0
-  crash_object_penalty: 50.0
-  crash_sidewalk_penalty: 50.0
-  driving_reward: 0.2
-  speed_reward: 0.05
-  use_lateral_reward: true
+  # Keep the POC focused on small lane-centering corrections. A later
+  # straight-road robustness experiment restores the full steering range.
+  steering_limit: 0.1
+  success_reward: 10.0
+  out_of_road_penalty: 5.0
+  crash_vehicle_penalty: 5.0
+  crash_object_penalty: 5.0
+  crash_sidewalk_penalty: 5.0
+  driving_reward: 1.0
+  speed_reward: 0.1
+  use_lateral_reward: false
   crash_vehicle_done: true
   out_of_road_done: true
   crash_object_done: true
   accident_prob: 0.0
-  reward_shaping:
-    minimum_speed_km_h: 5.0
-    low_speed_penalty: 0.05
-    lateral_penalty: 0.05
-    timeout_penalty: 50.0
-    steering_penalty: 0.005
-    steering_smoothness_penalty: 0.01
+  reward_shaping: {}
 
 validation:
   start_seed: 1000
-  num_scenarios: 50
-  traffic_density: 0.05
+  num_scenarios: 10
+  map: S
+  traffic_density: 0.0
   random_traffic: false
   random_spawn_lane_index: false
-  episodes: 50
+  episodes: 10
   deterministic: true
   progress: false
   vec_env: subproc
 
 test:
-  start_seed: 3000
-  num_scenarios: 100
-  traffic_density: 0.05
+  # Seeds 3000--3019 were consumed by the local diagnosis.
+  start_seed: 4000
+  num_scenarios: 20
+  map: S
+  traffic_density: 0.0
   random_traffic: false
   random_spawn_lane_index: false
-  episodes: 100
+  episodes: 20
   deterministic: true
   progress: true
   vec_env: subproc

@@ -1,8 +1,10 @@
 # SafeRL-Drive: MetaDrive MVP with PPO and SAC
 
-SafeRL-Drive is a focused Phase-1 autonomous-driving reinforcement-learning project. It
-trains continuous-control PPO and SAC agents in MetaDrive, evaluates them on held-out
-procedural scenarios, and compares them with MetaDrive's rule-based IDM controller.
+SafeRL-Drive is a focused student reinforcement-learning project for closed-loop driving
+in MetaDrive. Phase 1 asks a deliberately bounded question: can PPO and SAC reliably learn
+lane following and route completion on one traffic-free straight
+road, under the same observations, reward, and evaluation metrics? The learned
+agents are compared with MetaDrive's rule-based IDM controller.
 
 The project uses vector observations and records success, collision, off-road, timeout,
 route-completion, return, cost, speed, and episode-length metrics. Every experiment keeps
@@ -56,34 +58,41 @@ pip install -e .
 SafeRL-Drive uses Gymnasium. The Colab notebooks remove the obsolete `gym` distribution
 before installation so Stable-Baselines3 does not print Gym's maintenance warning.
 
-## Phase-1 experiment plan
+## Scope and end objective
 
-Run only this limited matrix, in order:
+The core claim is intentionally modest: **standard PPO and SAC can learn reproducible
+lane-following controls in this pipeline**. Phase 1 is complete only when
+each learned agent's frozen best checkpoint reaches at least 80% success and 90% mean
+route completion, with at most 10% collision, off-road, and timeout outcomes on 20
+untouched test episodes. It does not claim robust autonomous driving, procedural-map generalization, or
+algorithmic superiority from a single seed. PPO uses MetaDrive's documented beginner
+3-by-3 steering/throttle action grid. SAC remains continuous, with steering limited to
+`[-0.1, 0.1]` for basic lane centering and full throttle/brake. Because these action
+interfaces differ, Phase 1 demonstrates two working learning controls and does not support
+a PPO-versus-SAC ranking.
 
-1. **Smoke test** — verify MetaDrive, Stable-Baselines3, training, evaluation, plotting,
-   and artifact creation with `configs/smoke_test.yaml`. This is not a report result.
-2. **Native-policy gates** — require the expert to succeed on at least 80% of 10 fixed
-   validation trials, then repeat IDM and require reproducible outcomes.
-3. **Control pilots** — run PPO and SAC for 100,000 steps without traffic. Each must reach
-   at least 10% validation success and 50% route completion before a full run is allowed.
-4. **PPO** — train one continuous-control vector-observation run for 500,000 timesteps
-   using four subprocess environments.
-5. **SAC** — train one comparable run for 500,000 timesteps using one environment.
-6. **Held-out evaluation** — after both learned configurations are frozen, evaluate IDM
-   and each frozen validation winner once on 100 held-out test scenarios.
-7. **Videos** — record one top-down best-model rollout for PPO and one for SAC.
-8. **Final comparison** — compare IDM, PPO, and SAC and write the Phase-1 CSV, JSON, and
-   plot.
-9. **Report generation** — fill the result placeholders and compile the LaTeX report.
+Run this limited matrix in order:
 
-Training scenarios begin at seed 0. Fixed validation scenarios begin at seed 1000 and are
-used for checkpoint selection. The reported test scenarios begin at seed 3000 and are not
-consulted until the checkpoint is frozen. Seeds 2000--2099 were inspected during the July
-diagnosis and are no longer considered held out. Validation and test traffic generation is
-deterministic, while full training keeps randomized traffic for diversity. Phase 1 uses a
-three-block road and traffic density 0.05 as a deliberately learnable control benchmark;
-harder maps and traffic are difficulty extensions, not prerequisites for proving the
-training pipeline works.
+1. **Wiring smoke test** — verify installation, training, evaluation, plots, and artifacts.
+2. **Native-policy checks** — verify IDM determinism and task feasibility.
+3. **Learning controls** — train PPO and SAC for at most 100,000 steps on one
+   straight road with no traffic. Validation runs every 25,000 steps; training stops after
+   saving a checkpoint that also stays at or below 10% collision, off-road, and timeout outcomes.
+4. **Held-out evaluation** — compare IDM, PPO, and SAC on 20 untouched test seeds.
+5. **Videos and report** — record one rollout per learned agent, generate the comparison,
+   and fill the report placeholders.
+
+Difficulty increases only after those deliverables exist: first test continuous PPO and
+unrestricted SAC steering on the same straight road, then use a fixed curved road, a small
+set of traffic-free procedural roads, and finally light traffic. A failure at one
+level is diagnosed at that level; it is not hidden by adding timesteps or more scenarios.
+Validation begins at seed 1000 and held-out testing at seed 4000. The road topology and
+no-traffic setting stay fixed while seeded straight-block parameters vary. This is a
+narrow reproducibility test, not evidence of broad procedural generalization. Seeds
+3000--3019 were consumed by the local diagnosis and are not reused for final reporting.
+Validation seeds are sent only to the simulator subprocess. They do not reset Python,
+NumPy, or PyTorch in the training process, so changing the validation episode count cannot
+silently change later PPO updates.
 
 ## Google Colab driver notebook
 
@@ -147,19 +156,18 @@ Notebook run order:
 5. Remove legacy Gym and install the repository with `pip install -e .`.
 6. Run the smoke test.
 7. Run the expert task-sanity and deterministic IDM reproducibility gates.
-8. Run both short learning gates and copy their artifacts to Drive.
-9. Run gated PPO and copy it to Drive.
-10. Run gated SAC and copy it to Drive.
-11. Run the IDM, best PPO, and best SAC held-out tests and copy them to Drive.
-12. Record one video for each learned agent.
-13. Build and display the Phase-1 comparison.
-14. Compile the report if `latexmk` is available, then perform the final artifact sync.
+8. Train the Phase-1 PPO and SAC controls, enforce their gates, and copy them to Drive.
+9. Inspect each qualifying validation summary.
+10. Run the IDM, best PPO, and best SAC held-out tests and copy them to Drive.
+11. Record one video for each learned agent.
+12. Build and display the Phase-1 comparison.
+13. Compile the report if `latexmk` is available, then perform the final artifact sync.
 
-The long experiment sections are independent. In a later Colab session, rerun the setup
-sections and then continue from the required experiment. `FULL_TIMESTEPS` defaults to
-500,000 and can be changed to 1,000,000 at the top of the notebook for an intentionally
-longer run. The smaller `notebooks/colab_smoke_test.ipynb` remains available as a quick
-VS Code, Colab, GitHub, Drive, GPU, and headless-MetaDrive connection check.
+The experiment sections are independent. In a later Colab session, rerun the setup
+sections and then continue from the required experiment. `PHASE1_TIMESTEPS` is 100,000;
+the success-first callback may stop earlier after saving a qualifying checkpoint.
+The smaller `notebooks/colab_smoke_test.ipynb` remains available as a quick VS Code,
+Colab, GitHub, Drive, GPU, and headless-MetaDrive connection check.
 
 ## Command-line workflow
 
@@ -180,39 +188,26 @@ python -m scripts.evaluate_baseline \
   --verify-repeat
 ```
 
-Before a full run, execute the 100,000-step no-traffic control pilots used by the Colab
-notebook. They use separate latest pointers, so they cannot replace report-quality runs:
+Run the Phase-1 controls. These are the report runs; duplicating the same
+configuration would spend compute without answering a new question:
 
 ```bash
-python -m scripts.train --config configs/ppo_mvp.yaml --run-name ppo_control_pilot \
-  experiment.latest_name=ppo_pilot train.total_timesteps=100000 \
-  train.checkpoint_freq=25000 train.eval_freq=25000 validation.episodes=20 \
-  metadrive.traffic_density=0.0 metadrive.random_traffic=false \
-  validation.traffic_density=0.0
+python -m scripts.train --config configs/ppo_mvp.yaml --run-name ppo_phase1_control
 
-python -m scripts.train --config configs/sac_mvp.yaml --run-name sac_control_pilot \
-  experiment.latest_name=sac_pilot train.total_timesteps=100000 \
-  train.checkpoint_freq=25000 train.eval_freq=25000 validation.episodes=20 \
-  metadrive.traffic_density=0.0 metadrive.random_traffic=false \
-  validation.traffic_density=0.0
+python -m scripts.train --config configs/sac_mvp.yaml --run-name sac_phase1_control
 ```
 
-The notebook enforces the numerical gates. If either pilot fails, stop and inspect its
-validation history and `training_diagnostics.json`; do not launch the corresponding full
-run. Once both pass, training selects and freezes a validation winner without inspecting
-the held-out test split:
-
-```bash
-python -m scripts.train --config configs/ppo_mvp.yaml
-python -m scripts.train --config configs/sac_mvp.yaml
-```
+The notebook enforces 80% success, 90% route completion, and maximum 10% collision,
+off-road, and timeout gates. If either control fails,
+stop and inspect its validation history and `training_diagnostics.json`; do not increase
+task difficulty. A passing run has already selected and frozen its validation winner
+without inspecting the held-out test split.
 
 Dotlist overrides remain available:
 
 ```bash
 python -m scripts.train --config configs/ppo_mvp.yaml \
-  train.total_timesteps=1000000 \
-  test.episodes=100
+  logging.console_level=DEBUG
 ```
 
 The successful runs update `runs/latest_idm.txt`, `runs/latest_ppo.txt`, and
@@ -224,27 +219,29 @@ runs in a separate subprocess even when PPO, SAC, or the smoke test uses one tra
 environment. Do not configure more than one MetaDrive environment with `DummyVecEnv`; use
 `subproc` or set `n_envs: 1`.
 
-The PPO configuration explicitly keeps its MLP policy on CPU and collects experience in
-four MetaDrive subprocesses. Each update receives 4,096 samples and uses batches of 256,
-giving more frequent updates while retaining 16 minibatches per epoch. More
-workers are not automatically better: keep `n_envs` at or below the Colab runtime's
-logical CPU count and leave capacity for the learner and evaluation subprocess.
+The PPO configuration keeps its MLP policy on CPU and collects experience in four
+MetaDrive subprocesses. Each update receives 4,096 samples and uses batches of 256. Its
+3-by-3 discrete action grid follows MetaDrive's beginner PPO example and removes
+destructive full-lock continuous exploration from the Phase-1 proof. More workers are not
+automatically better: keep `n_envs` at or below the runtime's logical CPU count.
 
-SAC keeps `device: auto`. On a GPU Colab runtime this selects CUDA; on a machine without
-CUDA it falls back to CPU. SAC performs actor and critic gradient updates after experience
-collection, so the GPU is more useful than it is for PPO's small MLP. The selected device
-is printed at startup and saved in `run_metadata.json`. To compare SAC wall-clock speed on
-a particular runtime, run a short trial with `algorithm.kwargs.device=cpu`; GPU speedups
-are workload-dependent. The corrected SAC setup also reduces the learning rate, uses a
-larger replay buffer and batch, and fixes the entropy coefficient at 0.05 because the prior
-automatic coefficient and critic grew without bound together.
+SAC keeps `device: auto`; Colab can use CUDA while a machine without CUDA falls back to
+CPU. The bounded run uses a 100,000-transition buffer, begins updates after 5,000 steps,
+and fixes the entropy coefficient at 0.05. The automatic control collapsed from about
+0.22 to near zero during diagnosis, but fixed entropy alone still failed with unrestricted
+steering. SAC's Phase-1 steering limit was the decisive task-boundary change. PPO instead
+uses the documented discrete control abstraction. Replay-buffer
+serialization is disabled because the file is large and is unnecessary for
+evaluation, plots, or videos. The selected device is printed and saved in
+`run_metadata.json`.
 
-MetaDrive's vector observation is already bounded in `[0, 1]`, so the current configs do
-not add `VecNormalize` observation statistics. A SafeDrive reward wrapper makes the
-reported objective explicit: slow driving, lateral lane deviation, unstable steering, and timeout are penalized;
-terminal success and safety outcomes dominate dense progress. `truncate_as_terminate` is
-enabled because a horizon timeout is a task failure, not a state from which the value
-function should bootstrap.
+MetaDrive's vector observation is already bounded in `[0, 1]`, so the configs do not add
+`VecNormalize`. Phase 1 deliberately returns to MetaDrive's documented reference reward:
+dense longitudinal progress and speed, plus terminal success/failure values. The previous
+custom penalties created a profitable stall policy under a long horizon. Safety remains
+visible through success, collision, off-road, timeout, and cost metrics. The 500-step
+horizon is treated as a Gymnasium truncation so value learning can bootstrap through the
+artificial time limit.
 
 After both learned configurations are frozen, run the IDM test and evaluate each trained
 best model on the same held-out split:
@@ -253,14 +250,14 @@ best model on the same held-out split:
 python -m scripts.evaluate_baseline \
   --config configs/ppo_mvp.yaml \
   --split test \
-  --episodes 100 \
+  --episodes 20 \
   --prefix idm_test
 
 python -m scripts.evaluate \
   --run-dir runs/<ppo-run> \
   --model best \
   --split test \
-  --episodes 100 \
+  --episodes 20 \
   --prefix best_test
 ```
 
@@ -272,7 +269,7 @@ to final automatically with a warning:
 python -m scripts.record_video \
   --run-dir runs/<ppo-run> \
   --model best \
-  --seed 3007 \
+  --seed 4007 \
   --steps 1000
 ```
 
@@ -301,11 +298,10 @@ python -m scripts.evaluate \
   --prefix best_train_seeds
 ```
 
-High training-seed success with low validation success indicates overfitting. Low success on
-both ranges indicates an optimization, reward, termination, or task-difficulty problem. The
-Phase-1 configs now use a learnable three-block road, align terminal and timeout incentives
-with the reported metrics, reduce the pure progress incentive, penalize unstable control,
-and use a larger policy network.
+High training-seed success with low validation success indicates overfitting. Low success
+on both ranges indicates an optimization, reward, termination, or task-difficulty problem.
+Do not respond by jumping directly to more maps, traffic, or reward terms. First reproduce
+the straight-road control; then change one difficulty dimension at a time.
 
 Manual summary comparison is still supported:
 
@@ -341,7 +337,7 @@ run_dir/
 │   ├── best_model.zip               # success-first validation winner
 │   ├── vecnormalize.pkl              # only when normalization is enabled
 │   ├── best_vecnormalize.pkl         # only when normalization is enabled
-│   └── replay_buffer.pkl             # SAC
+│   └── replay_buffer.pkl             # SAC only when explicitly enabled
 ├── checkpoints/
 ├── eval/
 │   ├── validation_history.json

@@ -231,7 +231,9 @@ def evaluate_policy_vecenv(
     for episode in iterator:
         requested_seed = _episode_seed(start_seed, num_scenarios, episode)
         if requested_seed is not None:
-            set_global_seeds(requested_seed)
+            # Callback evaluation runs its simulator in a subprocess. Seeding the
+            # parent process here would also reseed PPO/SAC between updates and make
+            # the learned policy depend on how many validation episodes were run.
             venv.seed(requested_seed)
         observation = venv.reset()
         done = False

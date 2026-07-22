@@ -79,7 +79,7 @@ def main():
         testing = get_evaluation_config(config, "test")
         video_seed = args.seed
         if video_seed is None:
-            video_seed = int(testing.get("start_seed", 3000))
+            video_seed = int(testing.get("start_seed", 4000))
         set_global_seeds(video_seed)
 
         environment_config = make_eval_metadrive_config(config, "test")

@@ -107,6 +107,19 @@ class _TrainingDiagnosticsCallback(BaseCallback):
         return sum(float(item[key]) for item in self.outcomes) / len(self.outcomes)
 
     def _record_actions(self):
+        recorded = False
+        for info in self.locals.get("infos", []):
+            candidate = info.get("action", info.get("raw_action"))
+            if candidate is None:
+                continue
+            values = np.asarray(candidate, dtype=float).reshape(-1)
+            if values.size >= 2:
+                self.actions.append(values[:2].copy())
+                recorded = True
+        if recorded:
+            return
+
+        # Generic Gymnasium environments may not report the applied action.
         actions = np.asarray(self.locals.get("actions", []), dtype=float)
         if actions.size == 0:
             return
@@ -189,6 +202,11 @@ class _SuccessFirstValidationCallback(BaseCallback):
         num_scenarios,
         deterministic,
         run_logger,
+        stop_success_rate=None,
+        stop_route_completion=None,
+        stop_max_collision_rate=None,
+        stop_max_out_of_road_rate=None,
+        stop_max_timeout_rate=None,
     ):
         super().__init__(verbose=0)
         self.eval_env = eval_env
@@ -199,6 +217,11 @@ class _SuccessFirstValidationCallback(BaseCallback):
         self.num_scenarios = int(num_scenarios)
         self.deterministic = bool(deterministic)
         self.run_logger = run_logger
+        self.stop_success_rate = stop_success_rate
+        self.stop_route_completion = stop_route_completion
+        self.stop_max_collision_rate = stop_max_collision_rate
+        self.stop_max_out_of_road_rate = stop_max_out_of_road_rate
+        self.stop_max_timeout_rate = stop_max_timeout_rate
         self.best_score = None
         self.history = []
 
@@ -249,6 +272,23 @@ class _SuccessFirstValidationCallback(BaseCallback):
 
         score = checkpoint_selection_score(summary)
         is_new_best = self.best_score is None or score > self.best_score
+        target_reached = False
+        if self.stop_success_rate is not None and self.stop_route_completion is not None:
+            target_reached = summary["success_rate"] >= float(self.stop_success_rate) and summary[
+                "mean_route_completion"
+            ] >= float(self.stop_route_completion)
+            if self.stop_max_collision_rate is not None:
+                target_reached = target_reached and summary["collision_rate"] <= float(
+                    self.stop_max_collision_rate
+                )
+            if self.stop_max_out_of_road_rate is not None:
+                target_reached = target_reached and summary["out_of_road_rate"] <= float(
+                    self.stop_max_out_of_road_rate
+                )
+            if self.stop_max_timeout_rate is not None:
+                target_reached = target_reached and summary["timeout_or_max_step_rate"] <= float(
+                    self.stop_max_timeout_rate
+                )
         self.run_logger.info(
             "Validation at %s steps: success %.1f%% | route %.1f%% | "
             "collision %.1f%% | off-road %.1f%% | timeout %.1f%%%s",
@@ -260,10 +300,11 @@ class _SuccessFirstValidationCallback(BaseCallback):
             100.0 * summary["timeout_or_max_step_rate"],
             " | new best" if is_new_best else "",
         )
-        if not is_new_best:
+        if not is_new_best and not target_reached:
             return True
 
-        self.best_score = score
+        if is_new_best:
+            self.best_score = score
         self.model.save(self.run_dir / "models" / "best_model")
         vecnormalize = self.model.get_vec_normalize_env()
         if vecnormalize is not None:
@@ -273,10 +314,17 @@ class _SuccessFirstValidationCallback(BaseCallback):
             {
                 "timesteps": int(self.num_timesteps),
                 "score": list(score),
+                "qualified": target_reached,
                 "summary": summary,
             },
             self.run_dir / "eval" / "best_checkpoint_selection.json",
         )
+        if target_reached:
+            self.run_logger.info(
+                "Learning target reached at %s steps; stopping after saving the checkpoint.",
+                self.num_timesteps,
+            )
+            return False
         return True
 
 
@@ -345,7 +393,7 @@ def main():
         },
         "test": {
             "episodes": int(testing.get("episodes", 100)),
-            "start_seed": int(testing.get("start_seed", 3000)),
+            "start_seed": int(testing.get("start_seed", 4000)),
             "num_scenarios": int(testing.get("num_scenarios", 100)),
             "vec_env": testing.get("vec_env", "subproc"),
         },
@@ -461,6 +509,11 @@ def main():
                     num_scenarios=int(validation.get("num_scenarios", 50)),
                     deterministic=bool(validation.get("deterministic", True)),
                     run_logger=logger,
+                    stop_success_rate=training.get("stop_success_rate"),
+                    stop_route_completion=training.get("stop_route_completion"),
+                    stop_max_collision_rate=training.get("stop_max_collision_rate"),
+                    stop_max_out_of_road_rate=training.get("stop_max_out_of_road_rate"),
+                    stop_max_timeout_rate=training.get("stop_max_timeout_rate"),
                 )
             )
 
@@ -473,6 +526,9 @@ def main():
             log_interval=10,
             progress_bar=bool(training.get("progress_bar", True)),
         )
+        completed_timesteps = int(model.num_timesteps)
+        metadata["training"]["completed_timesteps"] = completed_timesteps
+        metadata["training"]["stopped_early"] = completed_timesteps < total_timesteps
 
         final_model_path = run_dir / "models" / "final_model"
         model.save(final_model_path)
@@ -490,7 +546,11 @@ def main():
             metadata["outputs"]["best_vecnormalize"] = str(best_vecnormalize_path)
             logger.debug("Saved best-model VecNormalize statistics: %s", best_vecnormalize_path)
 
-        if algorithm_name == "sac" and hasattr(model, "save_replay_buffer"):
+        if (
+            algorithm_name == "sac"
+            and bool(training.get("save_replay_buffer", False))
+            and hasattr(model, "save_replay_buffer")
+        ):
             replay_path = run_dir / "models" / "replay_buffer.pkl"
             model.save_replay_buffer(replay_path)
             metadata["outputs"]["replay_buffer"] = str(replay_path)

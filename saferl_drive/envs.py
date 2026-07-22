@@ -102,6 +102,45 @@ class _SafeDriveRewardWrapper(gym.Wrapper):
         return observation, reward, terminated, truncated, info
 
 
+class _MetaDriveScenarioSeedWrapper(gym.Wrapper):
+    """Keep reset seeds inside MetaDrive's configured scenario range."""
+
+    def __init__(self, env, start_seed, num_scenarios):
+        super().__init__(env)
+        self.start_seed = int(start_seed)
+        self.num_scenarios = max(int(num_scenarios), 1)
+
+    def reset(self, **kwargs):
+        seed = kwargs.get("seed")
+        if seed is not None:
+            kwargs["seed"] = _valid_scenario_seed(seed, self.start_seed, self.num_scenarios)
+        return self.env.reset(**kwargs)
+
+
+class _SteeringLimitWrapper(gym.ActionWrapper):
+    """Expose a smaller steering range for the straight-road learning control."""
+
+    def __init__(self, env, steering_limit):
+        super().__init__(env)
+        limit = float(steering_limit)
+        if not 0.0 < limit <= 1.0:
+            raise ValueError("steering_limit must be greater than 0 and at most 1.")
+        if not isinstance(env.action_space, gym.spaces.Box) or env.action_space.shape[0] < 2:
+            raise ValueError("steering_limit requires MetaDrive's continuous two-action space.")
+        low = env.action_space.low.copy()
+        high = env.action_space.high.copy()
+        low[0] = max(float(low[0]), -limit)
+        high[0] = min(float(high[0]), limit)
+        self.action_space = gym.spaces.Box(low=low, high=high, dtype=env.action_space.dtype)
+
+    def reset(self, **kwargs):
+        # MetaDrive 0.4.3 predates Gymnasium's ``options`` reset argument.
+        return self.env.reset(**kwargs)
+
+    def action(self, action):
+        return np.clip(action, self.action_space.low, self.action_space.high)
+
+
 def sanitize_metadrive_config(env_config):
     """Add phase-1 defaults while preserving user-provided config values."""
     cfg = copy.deepcopy(env_config)
@@ -115,12 +154,13 @@ def sanitize_metadrive_config(env_config):
     return cfg
 
 
-def make_metadrive_env(env_config, seed=None, monitor_file=None):
+def make_metadrive_env(env_config, seed=None, monitor_file=None, scenario_seed=None):
     """Create a single MetaDriveEnv instance wrapped with SB3 Monitor."""
     from metadrive.envs import MetaDriveEnv
 
     cfg = sanitize_metadrive_config(env_config)
     reward_shaping = cfg.pop("reward_shaping", None)
+    steering_limit = cfg.pop("steering_limit", None)
     policy_name = cfg.pop("_safedrive_agent_policy", None)
     if policy_name == "IDMPolicy":
         # Import the native MetaDrive policy only in the process that owns the
@@ -137,13 +177,23 @@ def make_metadrive_env(env_config, seed=None, monitor_file=None):
     if seed is not None:
         set_global_seeds(seed)
     env = MetaDriveEnv(cfg)
+    if steering_limit is not None:
+        env = _SteeringLimitWrapper(env, steering_limit)
+    env = _MetaDriveScenarioSeedWrapper(
+        env,
+        start_seed=cfg.get("start_seed", 0),
+        num_scenarios=cfg.get("num_scenarios", 1),
+    )
     if reward_shaping:
         env = _SafeDriveRewardWrapper(env, reward_shaping)
-    if seed is not None:
+    if scenario_seed is None:
+        scenario_seed = seed
+    if scenario_seed is not None:
         try:
-            env.reset(seed=seed)
+            env.reset(seed=scenario_seed)
         except TypeError:
-            env.seed(seed)
+            env.unwrapped.seed(scenario_seed)
+    if seed is not None:
         try:
             env.action_space.seed(seed)
         except Exception:
@@ -159,14 +209,38 @@ def make_metadrive_env(env_config, seed=None, monitor_file=None):
 def make_env_fn(env_config, rank, seed, monitor_dir=None):
     """Return a thunk for DummyVecEnv/SubprocVecEnv."""
 
+    scenario_seed = _worker_scenario_seed(env_config, rank)
+
     def _init():
         monitor_file = None
         if monitor_dir is not None:
             Path(monitor_dir).mkdir(parents=True, exist_ok=True)
             monitor_file = Path(monitor_dir) / f"env_{rank}.monitor.csv"
-        return make_metadrive_env(env_config, seed=seed + rank, monitor_file=monitor_file)
+        return make_metadrive_env(
+            env_config,
+            seed=seed + rank,
+            monitor_file=monitor_file,
+            scenario_seed=scenario_seed,
+        )
 
     return _init
+
+
+def _worker_scenario_seed(env_config, rank):
+    """Map a worker onto a valid MetaDrive scenario independently of its RNG seed."""
+    start_seed = int(env_config.get("start_seed", 0))
+    num_scenarios = max(int(env_config.get("num_scenarios", 1)), 1)
+    return start_seed + rank % num_scenarios
+
+
+def _valid_scenario_seed(seed, start_seed, num_scenarios):
+    """Preserve explicit scenario IDs and map generic RNG seeds into the valid range."""
+    seed = int(seed)
+    start_seed = int(start_seed)
+    num_scenarios = max(int(num_scenarios), 1)
+    if start_seed <= seed < start_seed + num_scenarios:
+        return seed
+    return start_seed + seed % num_scenarios
 
 
 def make_vec_env(

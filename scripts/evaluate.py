@@ -82,7 +82,7 @@ def main():
             )
 
         evaluation = get_evaluation_config(config, args.split)
-        default_seeds = {"train": 0, "validation": 1000, "test": 3000}
+        default_seeds = {"train": 0, "validation": 1000, "test": 4000}
         default_seed = default_seeds[args.split]
         start_seed = int(evaluation.get("start_seed", default_seed))
         set_global_seeds(start_seed)

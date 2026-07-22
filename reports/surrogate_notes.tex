@@ -3,6 +3,7 @@
 \usepackage[margin=0.8in]{geometry}
 \usepackage{booktabs}
 \usepackage[hidelinks]{hyperref}
+\emergencystretch=2em
 
 \title{SafeRL-Drive Phase-1 Surrogate Notes}
 \author{Dheeraj Dhillon}
@@ -168,20 +169,122 @@ route completion. The SAC pilot also fails on a non-finite or final critic loss 
 \texttt{latest\_sac\_pilot.txt}, so they cannot replace full-run pointers. If a gate
 fails, stop; more timesteps are not the next experiment.
 
+\section{2026-07-21 unbiased reset and bounded Phase-1 scope}
+The newest PPO control pilot,
+\texttt{20260721\_230755\_ppo\_control\_pilot\_ppo\_seed0}, invalidated the preceding
+``Priority-0'' prescription. At 25,000 steps it had 0\% success, 100\% off-road, and
+3.6\% route completion. From 50,000 through 100,000 steps its deterministic policy mostly
+braked, timed out in every validation episode, and completed only 1.4\% of the route.
+Training was numerically finite, but sampled actions had mean absolute steering near 0.8
+and steering saturation around 35\%. This was learned failure, not an optimizer crash.
+
+The causal reset found four problems:
+\begin{enumerate}
+  \item The experiment asked one 100,000-step run to learn basic control, continuous
+        steering, 500-map generalization, traffic interaction, and a new safety reward at
+        once. It was not a controlled proof of learning.
+  \item With $\gamma=0.99$, a success reward of 100 delivered near step 474 contributes
+        only about 0.86 to the first decision. A timeout penalty of 50 at step 1000
+        contributes about 0.002. Dense progress before road departure could still have
+        positive discounted return, while braking avoided immediate risk.
+  \item Stable-Baselines3 initializes a continuous PPO policy with a unit standard
+        deviation. Clipping those samples into MetaDrive's $[-1,1]$ steering range caused
+        destructive exploration before a useful trajectory existed.
+  \item The environment factory confused the algorithm RNG seed with MetaDrive's scenario
+        index. The broad 0--499 range hid this. A one-map reproduction failed because PPO
+        reseeded workers with 0--3 while the only legal scenario was 5. The environment
+        boundary now maps generic RNG seeds into the configured scenario range while
+        preserving explicit validation/test scenario IDs.
+\end{enumerate}
+
+Controlled local experiments then separated pipeline competence from task difficulty.
+On MetaDrive's fixed curved map \texttt{C}, reference reward, no traffic, a 500-step
+horizon, and PPO initial \texttt{log\_std=-2}, PPO reached 39.4\% route completion at its
+best 100,000-step checkpoint but 0\% success. Extending a documented-style budget to
+300,000 steps still produced 0\% success. The same continuous learner on fixed straight
+map \texttt{S} reached 100\% success and 96.7\% route completion at 75,000 steps. Its
+frozen checkpoint then achieved 100\% success, 95.8\% mean route completion, and zero
+collision, off-road, or timeout outcomes across seeds 1000--1009. Thus the code path can
+learn, while curve following remains an unproven next capability. A further diagnostic on
+seeds 3000--3019 produced 90\% success, 95.9\% route completion, 0\% collision, 10\%
+off-road, and 0\% timeout. This passes the proposed numerical POC boundary, but consuming
+those results means that range is no longer held out; final reporting moves to 4000--4019.
+
+The first SAC straight-road control used automatic entropy tuning. Its coefficient fell
+from 0.223 at 10,000 steps to 0.011 at 20,000 and approximately
+$3\times10^{-5}$ by 45,000--50,000 steps. The critic remained finite, but actions became
+strongly asymmetric and saturated; deterministic validation had 0\% success and 100\%
+off-road at 50,000 steps. Fixed entropy 0.05 improved the 25,000-step checkpoint to
+57.1\% route completion, but it still had 0\% success and regressed by 50,000 steps.
+Enabling only MetaDrive's built-in lateral multiplier produced 33.1\% route completion
+and 0\% success at 25,000 steps. Generalized state-dependent exploration with initial
+\texttt{log\_std=-2} still sampled mean absolute steering near 0.49 by 10,000 steps.
+These one-change controls show that neither entropy, lateral reward, nor gSDE alone fixed
+the replay data.
+
+The decisive SAC boundary was explicit and task-level: its straight-road POC exposes
+steering only in $[-0.1,0.1]$ while leaving throttle/brake in $[-1,1]$. This represents
+small lane-centering corrections. SAC then reached 100\% validation
+success and 95.8\% route completion at 25,000 steps, so the new success-first callback
+saved the checkpoint and stopped training. On a separate diagnostic range, seeds
+3500--3519, the frozen checkpoint achieved 100\% success, 95.7\% route completion, and
+zero collision, off-road, and timeout outcomes. Final seeds 4000--4019 remain untouched.
+The same bound did not transfer cleanly to PPO: the best bounded PPO control reached 70\%
+success, 92.4\% route completion, and 40\% off-road at 75,000 steps, while changes to the
+bound, initial standard deviation, and lateral reward did not qualify. PPO with full
+steering and initial \texttt{log\_std=-2} reached 80\% validation success and 95.3\%
+route completion at 50,000 steps, but its 20\% off-road rate exposed a bug in the first
+early-stop rule: only success and route were enforced. The callback and notebook gate now
+also enforce the 10\% collision, off-road, and timeout limits, so that checkpoint can no longer pass
+prematurely. A separate full-steering diagnostic produced 85\% success, 95.5\% route
+completion, and 15\% off-road. The continuous-control probe therefore did not qualify
+within its 100,000-step budget.
+
+A second infrastructure bug explained why otherwise identical PPO runs diverged after the
+first 25,000-step validation. The vector evaluator called the project-wide random-seed
+helper before every validation episode. Because callback evaluation runs in a simulator
+subprocess but policy optimization resumes in the parent process, this silently reset
+Python, NumPy, and PyTorch's training random streams to the last validation scenario seed.
+Changing the number of validation scenarios therefore changed subsequent PPO minibatches
+and exploration. Vector evaluation now seeds only its simulator subprocess, and a regression
+test verifies that the parent random streams are unchanged.
+
+After isolating those random streams, the exact full-steering PPO control peaked at 40\%
+success, 87.7\% route completion, and 60\% off-road within 100,000 steps. Phase 1 therefore
+adopts MetaDrive's documented beginner PPO abstraction rather than presenting a fragile
+continuous result as solved: a $3\times3$ multidiscrete steering/throttle grid. With the
+same straight road, reference reward, strict validation split, and 100,000-step maximum,
+this PPO control reached 100\% success, 96.4\% route completion, and zero collision,
+off-road, or timeout outcomes at its first 25,000-step validation and stopped. Its frozen
+checkpoint repeated 100\% success, 96.6\% route completion, and zero failure outcomes on
+20 diagnostic seeds 3600--3619. Final seeds 4000--4019 remain untouched.
+
+This evidence supersedes the previous plan to call a three-block, 500-scenario traffic
+task the Phase-1 baseline. The required Phase-1 claim is now bounded lane
+following on one straight, traffic-free road. PPO and SAC each receive at most 100,000
+steps; a checkpoint must reach 80\% validation success and 90\% route completion. The
+callback saves the checkpoint before stopping only when validation collision, off-road,
+and timeout rates are also no greater than 10\%. Final test uses the same criteria on 20
+untouched seeds. PPO uses a $3\times3$ discrete control grid and SAC uses a continuous
+$[-0.1,0.1]$ steering control. These documented task interfaces prove pipeline competence
+but do not support a direct algorithm ranking. This is a student-scale proof of learning,
+not procedural generalization or safe autonomy. The
+difficulty ladder is continuous PPO and unrestricted SAC steering on the same road, a fixed
+curve, a small traffic-free procedural set, then light traffic.
+Only one dimension advances after both learned agents pass the current one.
+
 \section{Canonical experiment order}
 \begin{enumerate}
   \item Run the smoke test; do not use it as a report result.
-  \item Verify reproducible evaluation by running IDM twice on the same 10 validation seeds,
-        requiring identical categorical outcomes and near-identical aggregate metrics.
-  \item Require the native expert to achieve at least 80\% success on 10 validation seeds.
-  \item Run the 100,000-step no-traffic PPO and SAC controls; require both learning gates.
-  \item Train PPO and save its complete run directory only after its gate passes.
-  \item Train SAC and save its complete run directory only after its gate passes.
-  \item After both configurations are frozen, evaluate IDM and each validation winner
-        once on the same 100 held-out test scenarios.
+  \item Verify reproducible evaluation by running IDM twice on the same 10 validation seeds.
+  \item Run the straight-road PPO and SAC controls; require at least 80\% success,
+        90\% route completion, and no more than 10\% collision, off-road, or timeout outcomes from
+        each frozen best checkpoint.
+  \item Evaluate IDM and each validation winner once on the same 20 held-out test seeds.
   \item Record one top-down rollout per learned agent.
   \item Generate the IDM--PPO--SAC comparison.
   \item Fill the report placeholders and compile \texttt{main.tex}.
+  \item Only then attempt the fixed-curve extension as a separately labelled experiment.
 \end{enumerate}
 
 \section{Exact commands}
@@ -192,28 +295,18 @@ python -m scripts.evaluate_baseline --config configs/ppo_mvp.yaml \
   --policy expert --split validation --episodes 10 --prefix expert_sanity
 python -m scripts.evaluate_baseline --config configs/ppo_mvp.yaml \
   --split validation --episodes 10 --prefix idm_repro --verify-repeat
-python -m scripts.train --config configs/ppo_mvp.yaml --run-name ppo_control_pilot \
-  experiment.latest_name=ppo_pilot train.total_timesteps=100000 \
-  train.checkpoint_freq=25000 train.eval_freq=25000 validation.episodes=20 \
-  metadrive.traffic_density=0.0 metadrive.random_traffic=false \
-  validation.traffic_density=0.0
-python -m scripts.train --config configs/sac_mvp.yaml --run-name sac_control_pilot \
-  experiment.latest_name=sac_pilot train.total_timesteps=100000 \
-  train.checkpoint_freq=25000 train.eval_freq=25000 validation.episodes=20 \
-  metadrive.traffic_density=0.0 metadrive.random_traffic=false \
-  validation.traffic_density=0.0
-python -m scripts.train --config configs/ppo_mvp.yaml
-python -m scripts.train --config configs/sac_mvp.yaml
+python -m scripts.train --config configs/ppo_mvp.yaml --run-name ppo_phase1_control
+python -m scripts.train --config configs/sac_mvp.yaml --run-name sac_phase1_control
 python -m scripts.evaluate --run-dir <PPO_RUN> --model best \
   --split train --episodes 50 --prefix best_train_diagnostic
 python -m scripts.evaluate --run-dir <SAC_RUN> --model best \
   --split train --episodes 50 --prefix best_train_diagnostic
 python -m scripts.evaluate_baseline --config configs/ppo_mvp.yaml \
-  --split test --episodes 100 --prefix idm_test
+  --split test --episodes 20 --prefix idm_test
 python -m scripts.evaluate --run-dir <PPO_RUN> --model best \
-  --split test --episodes 100 --prefix best_test
+  --split test --episodes 20 --prefix best_test
 python -m scripts.evaluate --run-dir <SAC_RUN> --model best \
-  --split test --episodes 100 --prefix best_test
+  --split test --episodes 20 --prefix best_test
 python -m scripts.record_video --run-dir <PPO_RUN> --model best \
   --seed <DISCLOSED_SUCCESSFUL_TEST_SEED> --steps 1000
 python -m scripts.record_video --run-dir <SAC_RUN> --model best \
@@ -227,17 +320,17 @@ latexmk -cd -pdf -interaction=nonstopmode -halt-on-error reports/main.tex
   \toprule
   Setting & PPO & SAC \\
   \midrule
-  Timesteps & 500,000 & 500,000 \\
+  Maximum timesteps & 100,000 & 100,000 \\
   Policy & MLP & MLP \\
-  Action space & Continuous & Continuous \\
+  Action space & Continuous; steering $\pm0.1$ & Continuous; steering $\pm0.1$ \\
   Vector environments & 4 subprocess & 1 dummy \\
   Observation normalization & No & No \\
-  Map blocks / traffic density & 3 / 0.05 & 3 / 0.05 \\
-  Training scenarios & 500 & 500 \\
+  Map / traffic density & Straight \texttt{S} / 0 & Straight \texttt{S} / 0 \\
+  Training scenarios & 1 & 1 \\
   Training start seed & 0 & 0 \\
   Validation start seed & 1000 & 1000 \\
-  Held-out test start seed & 3000 & 3000 \\
-  Held-out test episodes & 100 & 100 \\
+  Held-out test start seed & 4000 & 4000 \\
+  Held-out test episodes & 20 & 20 \\
   \bottomrule
 \end{tabular}
 
@@ -287,7 +380,7 @@ Record the following from each long run's \texttt{logs/train.log} and
   \item Colab may include the obsolete \texttt{gym} distribution. The notebooks remove it
         before installing SafeDrive, which uses Gymnasium.
   \item Each reset seed must remain inside its configured range: validation begins at
-        1000 and held-out testing begins at 3000 for corrected configurations.
+        1000 and held-out testing begins at 4000 for corrected configurations.
   \item The initial smoke and SAC runs failed because training and callback evaluation both
         created MetaDrive's process-global engine in one Python process. Callback evaluation
         now uses a one-worker \texttt{SubprocVecEnv}.
@@ -308,17 +401,18 @@ Record the following from each long run's \texttt{logs/train.log} and
   \item Repeat the already-passing 10-scenario IDM reproducibility gate once in Colab as
         a runtime smoke check before spending credits on training.
   \item Seeds 2000--2099 were consumed by the second audit. Do not report them as held out;
-        corrected frozen configurations use 3000--3099 once.
-  \item Run the short no-traffic diagnostic pilots and enforce their gates before another
-        full run.
-  \item Final numerical results and report placeholders: TODO after corrected long runs.
-  \item Whether 1,000,000 timesteps materially improves either agent: optional manual test.
+        seeds 3000--3019 were consumed by the local PPO proof. Corrected frozen
+        configurations use 4000--4019 once.
+  \item Run the bounded SAC straight-road control in Colab and require its numerical gate.
+  \item Evaluate the qualifying frozen checkpoints, then fill the report placeholders.
+  \item Diagnose fixed-curve continuous steering only after the Phase-1 matrix is complete.
   \item Local macOS versus Colab runtime differences: TODO after both smoke tests.
 \end{itemize}
 
 \section{Deferred Phase-2 ideas}
-Seed sweeps, richer observation studies, and explicit safety interventions are intentionally
-outside Phase 1. Revisit them only after the current IDM--PPO--SAC matrix has complete,
-reproducible artifacts and a finished report.
+Fixed-curve control, procedural maps, traffic, seed sweeps, richer observations, and
+explicit safety interventions are intentionally outside the required Phase 1. Revisit them
+in that order only after the straight-road IDM--PPO--SAC matrix has complete reproducible
+artifacts and a finished report.
 
 \end{document}
