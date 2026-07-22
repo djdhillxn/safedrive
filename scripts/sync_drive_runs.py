@@ -98,16 +98,27 @@ def run_signature(run_dir):
         metadata_stat = metadata_path.stat()
     except OSError:
         return None
-    videos_mtime = None
+    videos = []
     videos_path = run_dir / "videos"
-    try:
-        videos_mtime = videos_path.stat().st_mtime_ns
-    except OSError:
-        pass
+    if videos_path.is_dir():
+        for path in sorted(videos_path.rglob("*")):
+            if not path.is_file():
+                continue
+            try:
+                file_stat = path.stat()
+            except OSError:
+                continue
+            videos.append(
+                {
+                    "path": str(path.relative_to(videos_path)),
+                    "size": file_stat.st_size,
+                    "mtime_ns": file_stat.st_mtime_ns,
+                }
+            )
     return {
         "metadata_size": metadata_stat.st_size,
         "metadata_mtime_ns": metadata_stat.st_mtime_ns,
-        "videos_mtime_ns": videos_mtime,
+        "videos": videos,
     }
 
 
@@ -333,6 +344,7 @@ def sync_runs(
             and source.name not in run_states
             and (destination / "run_metadata.json").is_file()
             and (destination / "run_metadata.json").stat().st_size == signature["metadata_size"]
+            and run_signature(destination).get("videos") == signature.get("videos")
         ):
             # Bootstrap the cache for artifacts brought over by the old full
             # sync or the one-time downloaded-folder migration.

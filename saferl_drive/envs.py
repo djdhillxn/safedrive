@@ -103,17 +103,23 @@ class _SafeDriveRewardWrapper(gym.Wrapper):
 
 
 class _MetaDriveScenarioSeedWrapper(gym.Wrapper):
-    """Keep reset seeds inside MetaDrive's configured scenario range."""
+    """Keep reset seeds valid and optionally cycle through configured scenarios."""
 
-    def __init__(self, env, start_seed, num_scenarios):
+    def __init__(self, env, start_seed, num_scenarios, sequential_seed=False):
         super().__init__(env)
         self.start_seed = int(start_seed)
         self.num_scenarios = max(int(num_scenarios), 1)
+        self.sequential_seed = bool(sequential_seed)
+        self.next_sequential_seed = self.start_seed
 
     def reset(self, **kwargs):
         seed = kwargs.get("seed")
         if seed is not None:
             kwargs["seed"] = _valid_scenario_seed(seed, self.start_seed, self.num_scenarios)
+        elif self.sequential_seed:
+            kwargs["seed"] = self.next_sequential_seed
+            offset = self.next_sequential_seed - self.start_seed + 1
+            self.next_sequential_seed = self.start_seed + offset % self.num_scenarios
         return self.env.reset(**kwargs)
 
 
@@ -161,6 +167,7 @@ def make_metadrive_env(env_config, seed=None, monitor_file=None, scenario_seed=N
     cfg = sanitize_metadrive_config(env_config)
     reward_shaping = cfg.pop("reward_shaping", None)
     steering_limit = cfg.pop("steering_limit", None)
+    sequential_seed = bool(cfg.pop("sequential_seed", False))
     policy_name = cfg.pop("_safedrive_agent_policy", None)
     if policy_name == "IDMPolicy":
         # Import the native MetaDrive policy only in the process that owns the
@@ -183,6 +190,7 @@ def make_metadrive_env(env_config, seed=None, monitor_file=None, scenario_seed=N
         env,
         start_seed=cfg.get("start_seed", 0),
         num_scenarios=cfg.get("num_scenarios", 1),
+        sequential_seed=sequential_seed,
     )
     if reward_shaping:
         env = _SafeDriveRewardWrapper(env, reward_shaping)

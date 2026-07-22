@@ -189,6 +189,10 @@ with an exact held-out IDM run and corrected videos, and then runs one focused s
 - **Ablation:** the training sequence is the intended difference; architecture, reward,
   action interface, final task, test split, and total budget match.
 
+SafeDrive consumes `sequential_seed` in its own scenario wrapper because MetaDrive 0.4.3
+does not accept that name in the environment constructor. Training still cycles through
+all configured scenarios; explicit validation and test seeds remain unchanged.
+
 Every evaluation summary stores two compatibility hashes. The task hash covers map,
 traffic, horizon, termination, reward, and evaluation split. The strict hash also covers
 the policy-facing action interface, SAC architecture, normalization, stopping target, and

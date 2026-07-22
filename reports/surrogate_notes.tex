@@ -373,7 +373,10 @@ Record the following from each long run's \texttt{logs/train.log} and
         lateral lane-centering factor. This could reward rapid forward progress before a
         failure. The revised config aligns terminal and lane-keeping incentives more closely
         with the reported safety metrics.
-  \item Representative video observations: TODO
+  \item Corrected representative videos: PPO seed 4000 completed successfully in 86
+        frames with 96.21\% route completion; SAC seed 4000 completed successfully in
+        124 frames with 95.99\% route completion. Both were encoded at 20 FPS with no
+        collision, off-road, or timeout outcome.
 \end{itemize}
 
 \section{Failed attempts and implementation notes}
@@ -400,11 +403,6 @@ Record the following from each long run's \texttt{logs/train.log} and
 
 \section{Unresolved issues}
 \begin{itemize}
-  \item Run IDM once on the exact held-out Phase-1 seeds 4000--4019. The latest synced
-        IDM run is the validation reproducibility gate, not the held-out test.
-  \item Regenerate the Phase-1 comparison only after that run. The compatibility guard now
-        refuses the old five-block, traffic-enabled IDM summary.
-  \item Record PPO and SAC videos with the corrected raw-MetaDrive render path.
   \item Execute the Phase-2 solvability checks and seed-0 direct/curriculum pilots in Colab.
 \end{itemize}
 
@@ -449,6 +447,14 @@ still selected the old 100-episode IDM run. That run used map 5, traffic density
 seeds beginning at 2000, a 1,000-step horizon, and different reward terms. It is not a
 valid comparator for the current straight-road learning controls.
 
+The 04:28 UTC closure rerun corrected that last gap. IDM evaluated the exact test seeds
+4000--4019 and achieved 100\% success, 95.60\% route completion, zero collision, zero
+off-road, and zero timeout outcomes. Mean return was 110.85, mean episode length 131.7,
+and mean speed 7.43 km/h. Its task fingerprint exactly matched the PPO and SAC test
+fingerprint. The regenerated descriptive comparison therefore passed compatibility
+checking. Corrected top-down PPO and SAC videos were also recorded successfully for seed
+4000 and copied to Drive. Phase 1 is closed.
+
 Experiment summaries now carry a task fingerprint and a strict fingerprint. The task
 fingerprint covers map, map randomization, traffic, horizon, termination, reward, and the
 evaluation seed/episode split. The strict fingerprint also covers the policy-facing action
@@ -469,6 +475,12 @@ third learned algorithm. The two conditions share full continuous control, the s
 $[256,256]$ MLP, reference reward, 500,000-step cap, no training traffic, 100 training
 scenarios beginning at seed 10000 (cycled sequentially), 25 validation scenarios beginning at seed 20000, and
 100 untouched test scenarios beginning at seed 30000.
+
+The first Phase-2 feasibility attempt exposed a version boundary before any rollout was
+created: MetaDrive 0.4.3 rejected \texttt{sequential\_seed} as a constructor option. The
+setting is now consumed by SafeDrive's scenario wrapper instead of being forwarded to
+MetaDrive. Resets without an explicit seed cycle deterministically through the configured
+training range, while validation and testing continue to request each exact scenario seed.
 
 The direct condition trains on random three-block maps throughout. The curriculum condition
 uses a fixed curve \texttt{C} for at most 100,000 steps, \texttt{SC} for at most 150,000

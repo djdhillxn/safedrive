@@ -11,21 +11,19 @@
 \author{Dheeraj Dhillon}
 \date{\today}
 
-% Phase-1 learned-policy values are known.  The IDM cells remain visibly pending
-% until the exact held-out test is rerun and the fingerprint-checked comparison
-% generates reports/generated_phase1_results.tex.
+% Phase-1 values are the exact fingerprint-compatible 20-episode test results.
 \newcommand{\PpoSuccess}{100.0\%}
 \newcommand{\SacSuccess}{100.0\%}
-\newcommand{\IdmSuccess}{Pending}
+\newcommand{\IdmSuccess}{100.0\%}
 \newcommand{\PpoCollision}{0.0\%}
 \newcommand{\SacCollision}{0.0\%}
-\newcommand{\IdmCollision}{Pending}
+\newcommand{\IdmCollision}{0.0\%}
 \newcommand{\PpoOffRoad}{0.0\%}
 \newcommand{\SacOffRoad}{0.0\%}
-\newcommand{\IdmOffRoad}{Pending}
+\newcommand{\IdmOffRoad}{0.0\%}
 \newcommand{\PpoCompletion}{96.1\%}
 \newcommand{\SacCompletion}{95.7\%}
-\newcommand{\IdmCompletion}{Pending}
+\newcommand{\IdmCompletion}{95.6\%}
 
 \newcommand{\DirectSuccess}{Pending}
 \newcommand{\CurriculumSuccess}{Pending}
@@ -106,8 +104,8 @@ ranking.
 \section{Phase-1 Results}
 \begin{table}[h]
   \centering
-  \caption{Held-out fixed-straight-road outcomes. The IDM row is populated only by the
-  fingerprint-checked comparison generated from the exact 20-episode test.}
+  \caption{Fingerprint-compatible held-out fixed-straight-road outcomes on seeds
+  4000--4019.}
   \label{tab:phase1-results}
   \begin{tabular}{lcccc}
     \toprule
@@ -137,11 +135,11 @@ For either 20-of-20 result, the 95\% Wilson interval for the underlying episode 
 probability is 83.9--100\%. The point estimates pass the predeclared gate, but the interval
 and single training seed rule out a strong robustness claim.
 
-The latest IDM reproducibility gate ran validation seeds 1000--1009 twice. Both passes
-produced identical per-scenario outcomes, 100\% success, 95.4\% route completion, and zero
-failures. This verifies deterministic baseline execution. It is not substituted for the
-held-out test. The comparison tool now refuses summaries whose map, traffic, horizon,
-reward, action interface, or evaluation split is incompatible.
+IDM achieved 100\% success, 95.6\% route completion, and zero failures on the same 20
+held-out episodes. Its earlier validation reproducibility gate also produced identical
+per-scenario outcomes across two fresh runs. The task fingerprints match for all three
+agents. The result remains a descriptive task-outcome comparison because IDM, discrete
+PPO, and continuous SAC expose different action interfaces.
 
 \ifphaseoneresults
 \begin{figure}[h]

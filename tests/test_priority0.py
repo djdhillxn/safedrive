@@ -82,6 +82,31 @@ def test_scenario_seed_wrapper_maps_each_reset():
     assert base.last_seed == 5
 
 
+def test_scenario_seed_wrapper_cycles_without_passing_project_option_to_metadrive():
+    class _SeedCaptureEnvironment(gym.Env):
+        def __init__(self):
+            self.observation_space = gym.spaces.Box(0.0, 1.0, shape=(1,))
+            self.action_space = gym.spaces.Box(-1.0, 1.0, shape=(1,))
+            self.seeds = []
+
+        def reset(self, *, seed=None, options=None):
+            self.seeds.append(seed)
+            return np.zeros(1), {}
+
+    base = _SeedCaptureEnvironment()
+    environment = _MetaDriveScenarioSeedWrapper(
+        base,
+        start_seed=10000,
+        num_scenarios=3,
+        sequential_seed=True,
+    )
+
+    for _ in range(5):
+        environment.reset()
+
+    assert base.seeds == [10000, 10001, 10002, 10000, 10001]
+
+
 def test_steering_limit_changes_the_action_space_and_clips_actions():
     class _ActionCaptureEnvironment(gym.Env):
         def __init__(self):

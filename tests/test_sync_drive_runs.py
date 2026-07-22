@@ -174,6 +174,21 @@ def test_full_sync_includes_training_artifacts(tmp_path):
     assert (local_runs / run_dir.name / "models" / "replay_buffer.pkl").exists()
 
 
+def test_sync_detects_a_video_added_after_run_metadata_stops_changing(tmp_path):
+    drive_project = tmp_path / "SafeDrive"
+    drive_runs = drive_project / "runs"
+    local_runs = tmp_path / "runs"
+    drive_runs.mkdir(parents=True)
+    run_dir = make_run(drive_runs, "20260101_000000_sac", "complete", "sac")
+
+    sync_runs(drive_project, local_runs)
+    (run_dir / "videos").mkdir()
+    (run_dir / "videos" / "rollout.mp4").write_bytes(b"late video")
+    sync_runs(drive_project, local_runs)
+
+    assert (local_runs / run_dir.name / "videos" / "rollout.mp4").read_bytes() == b"late video"
+
+
 def test_local_prune_removes_training_artifacts_only(tmp_path):
     local_runs = tmp_path / "runs"
     run_dir = local_runs / "20260101_000000_sac"
