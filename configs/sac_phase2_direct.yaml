@@ -41,7 +41,11 @@ algorithm:
     gradient_steps: 1
     ent_coef: 0.05
     target_update_interval: 1
-    optimize_memory_usage: true
+    # SB3 cannot combine its compact replay layout with correct timeout handling.
+    # Keep time-limit truncations bootstrappable instead of treating them as failures.
+    optimize_memory_usage: false
+    replay_buffer_kwargs:
+      handle_timeout_termination: true
     verbose: 0
     policy_kwargs:
       net_arch: [256, 256]

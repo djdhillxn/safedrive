@@ -17,7 +17,7 @@ from stable_baselines3.common.callbacks import (
 )
 from stable_baselines3.common.vec_env import VecNormalize, sync_envs_normalization
 
-from saferl_drive.algorithms import build_model
+from saferl_drive.algorithms import build_model, validate_algorithm_config
 from saferl_drive.config import (
     apply_dotlist_overrides,
     get_evaluation_config,
@@ -379,6 +379,7 @@ def main():
     experiment = config.get("experiment", {})
     training = config.get("train", {})
     algorithm = config.get("algorithm", {})
+    validate_algorithm_config(algorithm)
     validation = get_evaluation_config(config, "validation")
     testing = get_evaluation_config(config, "test")
     logging_config = config.get("logging", {})

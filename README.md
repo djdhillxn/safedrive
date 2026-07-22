@@ -256,7 +256,11 @@ python -m scripts.train_curriculum \
 
 The large intermediate replay buffer is necessary for faithful curriculum continuation
 and is retained in Drive. The default Mac sync excludes the entire `models/` directory,
-so it is not downloaded for analysis.
+so it is not downloaded for analysis. Phase 2 keeps SB3 timeout handling enabled and uses
+the standard replay layout because SB3 does not support timeout handling together with
+`optimize_memory_usage`. This uses roughly twice the observation storage of the compact
+layout, but it prevents horizon truncations from being learned as genuine terminal
+failures. Curriculum resume fails closed if its replay buffer was not restored.
 
 After explicit held-out evaluations, compare one or more complete seed pairs:
 

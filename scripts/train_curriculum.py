@@ -6,7 +6,11 @@ from pathlib import Path
 
 from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback
 
-from saferl_drive.algorithms import build_model, get_algorithm_class
+from saferl_drive.algorithms import (
+    build_model,
+    get_algorithm_class,
+    validate_algorithm_config,
+)
 from saferl_drive.config import (
     apply_dotlist_overrides,
     deep_update,
@@ -58,6 +62,7 @@ def stage_config(config, stage):
 
 
 def validate_curriculum_config(config):
+    validate_algorithm_config(config.get("algorithm", {}))
     if config.get("algorithm", {}).get("name", "").lower() != "sac":
         raise ValueError("The Phase-2 curriculum currently supports SAC only.")
     if config.get("metadrive", {}).get("discrete_action", False):
@@ -65,6 +70,11 @@ def validate_curriculum_config(config):
     if "steering_limit" in config.get("metadrive", {}):
         raise ValueError(
             "Phase 2 requires the full MetaDrive steering range; remove steering_limit."
+        )
+    if not config.get("train", {}).get("save_replay_buffer", False):
+        raise ValueError(
+            "Curriculum SAC must save its replay buffer so stage resumes preserve "
+            "the complete off-policy training state."
         )
 
     curriculum = config.get("curriculum", {})
@@ -154,6 +164,11 @@ def _load_resume_model(config, run_dir, environment, logger):
     if replay_path.exists():
         model.load_replay_buffer(replay_path)
         logger.info("Loaded curriculum replay buffer: %s", replay_path)
+    elif config.get("train", {}).get("save_replay_buffer", False):
+        raise FileNotFoundError(
+            "Curriculum replay buffer is missing: "
+            f"{replay_path}. Restore the run with training artifacts before resuming."
+        )
     else:
         logger.warning(
             "No replay buffer was found. Resume will continue from the saved actor and "

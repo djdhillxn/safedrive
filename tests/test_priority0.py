@@ -9,6 +9,7 @@ import pandas as pd
 import torch
 from stable_baselines3.common.vec_env import DummyVecEnv
 
+from saferl_drive.algorithms import validate_algorithm_config
 from saferl_drive.config import (
     fingerprint_differences,
     get_evaluation_config,
@@ -376,17 +377,55 @@ def test_phase_two_configs_share_the_exact_final_task_and_action_interface():
     assert curriculum["curriculum"]["total_timesteps"] == 500000
     assert "steering_limit" not in direct["metadrive"]
     assert "steering_limit" not in curriculum["metadrive"]
+    for config in [direct, curriculum]:
+        kwargs = config["algorithm"]["kwargs"]
+        assert kwargs["optimize_memory_usage"] is False
+        assert kwargs["replay_buffer_kwargs"]["handle_timeout_termination"] is True
+        validate_algorithm_config(config["algorithm"])
+
+
+def test_sac_config_rejects_the_incompatible_replay_buffer_options():
+    config = {
+        "name": "sac",
+        "kwargs": {
+            "buffer_size": 1000,
+            "learning_starts": 100,
+            "batch_size": 64,
+            "optimize_memory_usage": True,
+            "replay_buffer_kwargs": {"handle_timeout_termination": True},
+        },
+    }
+
+    try:
+        validate_algorithm_config(config)
+    except ValueError as error:
+        assert "cannot combine" in str(error)
+    else:
+        raise AssertionError("The incompatible SAC replay settings were accepted.")
 
 
 def test_curriculum_uses_early_stage_savings_on_the_final_stage():
     config = load_yaml("configs/sac_phase2_curriculum.yaml")
     stages = validate_curriculum_config(config)
 
+    assert config["train"]["save_replay_buffer"] is True
     assert curriculum_stage_budget(config, stages[0], 0) == 100000
     assert curriculum_stage_budget(config, stages[1], 75000) == 150000
     assert curriculum_stage_budget(config, stages[2], 200000) == 300000
     assert stage_config(config, stages[0])["metadrive"]["map"] == "C"
     assert stage_config(config, stages[1])["metadrive"]["map"] == "SC"
+
+
+def test_curriculum_requires_replay_state_for_faithful_resume():
+    config = load_yaml("configs/sac_phase2_curriculum.yaml")
+    config["train"]["save_replay_buffer"] = False
+
+    try:
+        validate_curriculum_config(config)
+    except ValueError as error:
+        assert "must save its replay buffer" in str(error)
+    else:
+        raise AssertionError("Curriculum accepted a resume path without replay state.")
 
 
 class _FakeRewardEnvironment(gym.Env):

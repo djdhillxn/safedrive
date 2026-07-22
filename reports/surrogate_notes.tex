@@ -482,6 +482,24 @@ setting is now consumed by SafeDrive's scenario wrapper instead of being forward
 MetaDrive. Resets without an explicit seed cycle deterministically through the configured
 training range, while validation and testing continue to request each exact scenario seed.
 
+After that fix, the July 22 Phase-2 feasibility gate passed on all 25 validation seeds.
+IDM recorded 100\% success, 98.6904\% mean route completion, zero collision, zero off-road,
+zero timeout, mean return 382.944, and mean episode length 445.24. ExpertPolicy recorded
+100\% success, 98.6853\% mean route completion, zero collision, zero off-road, zero timeout,
+mean return 382.963, and mean episode length 383.16. The target procedural task is therefore
+solvable under the frozen horizon and reward; a later learner failure cannot be attributed
+merely to impossible generated routes.
+
+The first direct SAC launch then stopped before learning because both Phase-2 files enabled
+Stable-Baselines3's compact replay layout. SB3 2.9.0 rejects
+that option while its default timeout handling is active. Disabling timeout handling would
+mislabel the experiment's horizon truncations as terminal transitions, so both direct and
+curriculum SAC now use the standard replay layout and explicitly retain timeout handling.
+The two conditions still have identical strict fingerprints. Configuration validation now
+catches this conflict before MetaDrive initialization. Curriculum resumption also fails
+closed when the required replay pickle is absent instead of silently continuing with an
+empty replay buffer and changing the experimental condition.
+
 The direct condition trains on random three-block maps throughout. The curriculum condition
 uses a fixed curve \texttt{C} for at most 100,000 steps, \texttt{SC} for at most 150,000
 steps, and spends the remaining budget on random three-block maps. The first two stages

@@ -181,6 +181,11 @@ in success, or similar success with at least 20\% fewer combined collision and o
 outcomes, with a consistent direction across the confirmation seeds.
 
 \section{Phase-2 Results}
+Before learned-policy training, both native controllers solved all 25 fixed validation
+scenarios. IDM achieved 100\% success, 98.69\% mean route completion, and zero collision,
+off-road, or timeout outcomes; ExpertPolicy achieved 100\%, 98.69\%, and zero respectively.
+This establishes task feasibility, but it is not evidence that SAC has learned the task.
+
 \begin{table}[h]
   \centering
   \caption{Unseen three-block procedural-road results, averaged across completed training
