@@ -322,7 +322,7 @@ latexmk -cd -pdf -interaction=nonstopmode -halt-on-error reports/main.tex
   \midrule
   Maximum timesteps & 100,000 & 100,000 \\
   Policy & MLP & MLP \\
-  Action space & Continuous; steering $\pm0.1$ & Continuous; steering $\pm0.1$ \\
+  Action space & $3\times3$ multidiscrete & Continuous; steering $\pm0.1$ \\
   Vector environments & 4 subprocess & 1 dummy \\
   Observation normalization & No & No \\
   Map / traffic density & Straight \texttt{S} / 0 & Straight \texttt{S} / 0 \\
@@ -342,11 +342,13 @@ Exact algorithm hyperparameters live in \texttt{configs/ppo\_mvp.yaml} and
 Record the following from each long run's \texttt{logs/train.log} and
 \texttt{run\_metadata.json}:
 \begin{itemize}
-  \item Date and Colab runtime type: TODO
-  \item Git commit: TODO
-  \item Python, MetaDrive, Stable-Baselines3, and Gymnasium versions: TODO
-  \item CUDA availability and GPU name: TODO
-  \item Wall-clock start/end and interruptions: TODO
+  \item Date and runtime: 22 July 2026, Google Colab NVIDIA L4 runtime.
+  \item Git commit: \texttt{87af637c3fea958d2e8ae22ffd1296dd6d79b706}.
+  \item Python 3.12.13, MetaDrive 0.4.3, Stable-Baselines3 2.9.0,
+        Gymnasium 1.3.0, PyTorch 2.11.0 with CUDA 12.8, and NumPy 2.0.2.
+  \item CUDA was available. PPO intentionally trained on CPU; SAC trained on the L4 GPU.
+  \item PPO trained from 01:24:43 to 01:26:15 UTC and stopped at 50,000 steps.
+        SAC trained from 01:26:38 to 01:35:37 UTC and stopped at 50,000 steps.
   \item Drive backup location: \texttt{/content/drive/MyDrive/SafeDrive}
 \end{itemize}
 
@@ -398,21 +400,99 @@ Record the following from each long run's \texttt{logs/train.log} and
 
 \section{Unresolved issues}
 \begin{itemize}
-  \item Repeat the already-passing 10-scenario IDM reproducibility gate once in Colab as
-        a runtime smoke check before spending credits on training.
-  \item Seeds 2000--2099 were consumed by the second audit. Do not report them as held out;
-        seeds 3000--3019 were consumed by the local PPO proof. Corrected frozen
-        configurations use 4000--4019 once.
-  \item Run the bounded SAC straight-road control in Colab and require its numerical gate.
-  \item Evaluate the qualifying frozen checkpoints, then fill the report placeholders.
-  \item Diagnose fixed-curve continuous steering only after the Phase-1 matrix is complete.
-  \item Local macOS versus Colab runtime differences: TODO after both smoke tests.
+  \item Run IDM once on the exact held-out Phase-1 seeds 4000--4019. The latest synced
+        IDM run is the validation reproducibility gate, not the held-out test.
+  \item Regenerate the Phase-1 comparison only after that run. The compatibility guard now
+        refuses the old five-block, traffic-enabled IDM summary.
+  \item Record PPO and SAC videos with the corrected raw-MetaDrive render path.
+  \item Execute the Phase-2 solvability checks and seed-0 direct/curriculum pilots in Colab.
 \end{itemize}
 
-\section{Deferred Phase-2 ideas}
-Fixed-curve control, procedural maps, traffic, seed sweeps, richer observations, and
-explicit safety interventions are intentionally outside the required Phase 1. Revisit them
-in that order only after the straight-road IDM--PPO--SAC matrix has complete reproducible
-artifacts and a finished report.
+\section{Phase-1 closure audit from 22 July 2026}
+The frozen PPO and SAC checkpoints both achieved 100\% success, zero collision, zero
+off-road, zero timeout, and approximately 96\% route completion on seeds 4000--4019.
+This headline parity hides an important behavioral difference. PPO's deterministic action
+was exactly zero steering and full throttle at every step. Its sampled training rollouts
+still reported only 3\% success and 96\% off-road outcomes at 50,000 steps. PPO therefore
+found an open-loop solution to a road that did not require feedback.
+
+SAC produced small state-dependent steering corrections, throttle modulation, and
+occasional braking. Its sampled rolling success rose from 30\% at 30,000 steps to 58\%,
+93\%, and 100\% at 45,000 and 50,000 steps. The critic loss oscillated but remained finite.
+This makes SAC the more credible control learner and the sole learned algorithm advanced
+to Phase 2.
+
+The exact learned-policy test summaries are retained below so later report revisions do
+not need to reconstruct them from prose:
+\begin{center}
+\small
+\begin{tabular}{lrrrrrr}
+  \toprule
+  Agent & Success & Route & Return & Length & Speed & Mean $|\delta|$ \\
+  \midrule
+  PPO & 100\% & 96.09\% & 109.99 & 82.45 & 12.05 & 0.0000 \\
+  SAC & 100\% & 95.73\% & 110.84 & 116.75 & 8.41 & 0.0222 \\
+  \bottomrule
+\end{tabular}
+\end{center}
+Speed is in km/h and $\delta$ is the normalized steering action. Both policies had 0\%
+collision, off-road, and timeout rates. PPO's mean throttle/brake action was 1.0000 and
+its mean action change was 0.0000. SAC's corresponding values were 0.3866 and 0.0312,
+with throttle on 88.10\% and braking on 4.36\% of steps. Each 20-of-20 success estimate
+has a 95\% Wilson interval of 83.89--100\%.
+
+The 03:01 UTC IDM rerun evaluated validation seeds 1000--1009 twice. Both passes produced
+identical categorical and continuous metrics: 100\% success, 95.4\% route completion,
+zero failures, mean return 106.71, and mean speed 7.40 km/h. This closes the reproducibility
+gate but does not replace the held-out test. The comparison executed immediately afterward
+still selected the old 100-episode IDM run. That run used map 5, traffic density 0.1,
+seeds beginning at 2000, a 1,000-step horizon, and different reward terms. It is not a
+valid comparator for the current straight-road learning controls.
+
+Experiment summaries now carry a task fingerprint and a strict fingerprint. The task
+fingerprint covers map, map randomization, traffic, horizon, termination, reward, and the
+evaluation seed/episode split. The strict fingerprint also covers the policy-facing action
+interface, SAC architecture, normalization, stopping target, and maximum training budget.
+The Phase-1 table requires task compatibility and explicitly prohibits an
+algorithm-ranking claim because PPO, SAC, and the native baseline use different controller
+interfaces. The Phase-2 direct-versus-curriculum comparison requires strict compatibility.
+
+The video traceback was also isolated. Stable-Baselines3 called \texttt{render} through a
+Gymnasium wrapper, whose method rejected MetaDrive's \texttt{mode} keyword. The recorder
+now unwraps the one-environment \texttt{DummyVecEnv} and calls the raw MetaDrive
+\texttt{render(mode="topdown", ...)} API directly.
+
+\section{Phase-2 implementation record}
+Phase 2 asks one question: does staged road-geometry curriculum improve unseen
+procedural-road generalization over equal-budget direct SAC training? It does not add a
+third learned algorithm. The two conditions share full continuous control, the same
+$[256,256]$ MLP, reference reward, 500,000-step cap, no training traffic, 100 training
+scenarios beginning at seed 10000 (cycled sequentially), 25 validation scenarios beginning at seed 20000, and
+100 untouched test scenarios beginning at seed 30000.
+
+The direct condition trains on random three-block maps throughout. The curriculum condition
+uses a fixed curve \texttt{C} for at most 100,000 steps, \texttt{SC} for at most 150,000
+steps, and spends the remaining budget on random three-block maps. The first two stages
+must reach 90\% success and route completion with no more than 10\% collision, off-road,
+or timeout outcomes before advancement. Early savings are transferred to the final stage.
+Actor, critic, optimizer, and replay-buffer state persist across stages. A stage-boundary
+pause writes a model, replay buffer, and \texttt{curriculum\_state.json}; the Mac analysis
+sync continues to exclude these large training artifacts.
+
+The experiment order is:
+\begin{enumerate}
+  \item close Phase 1 with exact-test IDM, fingerprint-checked comparison, and videos;
+  \item run Phase-2 IDM and ExpertPolicy validation feasibility checks;
+  \item run direct and curriculum SAC with algorithm seed 0;
+  \item test both frozen policies on 100 untouched procedural scenarios;
+  \item run seeds 1 and 2 only if either pilot reaches 50\% success or 80\% route completion;
+  \item evaluate frozen policies without retraining at traffic density 0.05;
+  \item compare all available strictly compatible training seeds and build the report.
+\end{enumerate}
+
+Traffic training, SafeMetaDrive obstacles, vehicle-dynamics randomization, image policies,
+real-world replay, and multi-agent experiments remain deferred. If Phase 2 succeeds, the
+next coherent extension is explicit obstacle/cost learning in SafeMetaDrive rather than
+another broad algorithm sweep.
 
 \end{document}

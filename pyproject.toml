@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "saferl-drive-metadrive-mvp"
 version = "0.1.0"
-description = "Phase-1 MetaDrive autonomous-driving MVP with PPO/SAC, evaluation metrics, plots, and videos."
+description = "Reproducible MetaDrive control and SAC curriculum experiments with strict evaluation compatibility."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{name = "Dheeraj"}]

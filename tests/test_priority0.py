@@ -9,7 +9,13 @@ import pandas as pd
 import torch
 from stable_baselines3.common.vec_env import DummyVecEnv
 
-from saferl_drive.config import get_evaluation_config, load_yaml, make_eval_metadrive_config
+from saferl_drive.config import (
+    fingerprint_differences,
+    get_evaluation_config,
+    load_yaml,
+    make_eval_metadrive_config,
+    make_experiment_fingerprint,
+)
 from saferl_drive.evaluation import (
     _episode_row,
     _speed_km_h,
@@ -23,6 +29,13 @@ from saferl_drive.envs import (
     _SteeringLimitWrapper,
     _valid_scenario_seed,
     _worker_scenario_seed,
+)
+from scripts.compare_runs import _compatibility
+from scripts.record_video import _raw_render_environment
+from scripts.train_curriculum import (
+    curriculum_stage_budget,
+    stage_config,
+    validate_curriculum_config,
 )
 
 
@@ -178,6 +191,101 @@ def test_validation_and_test_settings_are_separate():
     assert make_eval_metadrive_config(config, "test")["num_scenarios"] == 100
 
 
+def test_fingerprint_separates_task_and_action_compatibility():
+    config = {
+        "metadrive": {
+            "map": 3,
+            "traffic_density": 0.0,
+            "horizon": 1000,
+            "discrete_action": False,
+            "success_reward": 10.0,
+        },
+        "test": {
+            "start_seed": 30000,
+            "num_scenarios": 100,
+            "episodes": 100,
+            "map": 3,
+            "traffic_density": 0.0,
+        },
+    }
+    changed_action = {
+        **config,
+        "metadrive": {**config["metadrive"], "steering_limit": 0.1},
+    }
+    first = make_experiment_fingerprint(config)
+    second = make_experiment_fingerprint(changed_action)
+
+    assert first["task_id"] == second["task_id"]
+    assert first["strict_id"] != second["strict_id"]
+    assert fingerprint_differences(first, second, include_action=False) == []
+    assert fingerprint_differences(first, second, include_action=True)[0]["field"] == (
+        "action.steering_limit"
+    )
+
+
+def test_strict_compatibility_refuses_a_changed_test_split():
+    config = {
+        "metadrive": {"map": 3, "traffic_density": 0.0, "discrete_action": False},
+        "test": {"start_seed": 30000, "num_scenarios": 100, "episodes": 100},
+    }
+    changed = {
+        **config,
+        "test": {**config["test"], "start_seed": 31000},
+    }
+    records = [
+        {"label": "first", "fingerprint": make_experiment_fingerprint(config)},
+        {"label": "second", "fingerprint": make_experiment_fingerprint(changed)},
+    ]
+
+    try:
+        _compatibility(records, strict=True)
+    except ValueError as error:
+        assert "evaluation.start_seed" in str(error)
+    else:
+        raise AssertionError("An incompatible split should have been refused.")
+
+
+def test_strict_fingerprint_refuses_a_changed_training_budget():
+    config = {
+        "algorithm": {"name": "sac", "policy": "MlpPolicy", "kwargs": {}},
+        "train": {"total_timesteps": 500000},
+        "metadrive": {"map": 3, "traffic_density": 0.0, "discrete_action": False},
+        "test": {"start_seed": 30000, "num_scenarios": 100, "episodes": 100},
+    }
+    shorter = {
+        **config,
+        "train": {"total_timesteps": 100000},
+    }
+
+    first = make_experiment_fingerprint(config)
+    second = make_experiment_fingerprint(shorter)
+
+    assert first["task_id"] == second["task_id"]
+    assert first["strict_id"] != second["strict_id"]
+    differences = fingerprint_differences(first, second, include_action=True)
+    assert differences[0]["field"] == "training.maximum_timesteps"
+
+
+def test_video_renderer_reaches_the_unwrapped_environment():
+    class _RenderEnvironment(gym.Env):
+        def __init__(self):
+            self.observation_space = gym.spaces.Box(0.0, 1.0, shape=(1,))
+            self.action_space = gym.spaces.Box(-1.0, 1.0, shape=(2,))
+
+        def reset(self, *, seed=None, options=None):
+            return np.zeros(1), {}
+
+        def step(self, action):
+            return np.zeros(1), 0.0, False, False, {}
+
+    base = _RenderEnvironment()
+    vector = DummyVecEnv([lambda: gym.Wrapper(base)])
+    try:
+        assert _raw_render_environment(vector) is base
+    finally:
+        vector.close()
+
+
 def test_phase_one_configs_define_the_scoped_learning_tasks():
     for path in [Path("configs/ppo_mvp.yaml"), Path("configs/sac_mvp.yaml")]:
         config = load_yaml(path)
@@ -222,6 +330,38 @@ def test_phase_one_configs_define_the_scoped_learning_tasks():
     assert sac["metadrive"]["steering_limit"] == 0.1
     assert sac["train"]["save_replay_buffer"] is False
     assert sac["algorithm"]["kwargs"]["ent_coef"] == 0.05
+
+
+def test_phase_two_configs_share_the_exact_final_task_and_action_interface():
+    direct = load_yaml("configs/sac_phase2_direct.yaml")
+    curriculum = load_yaml("configs/sac_phase2_curriculum.yaml")
+    validate_curriculum_config(curriculum)
+
+    direct_fingerprint = make_experiment_fingerprint(direct, split="test")
+    curriculum_fingerprint = make_experiment_fingerprint(curriculum, split="test")
+
+    assert direct_fingerprint["strict_id"] == curriculum_fingerprint["strict_id"]
+    assert direct["metadrive"]["map"] == 3
+    assert direct["metadrive"]["num_scenarios"] == 100
+    assert direct["metadrive"]["sequential_seed"] is True
+    assert direct["validation"]["start_seed"] == 20000
+    assert direct["test"]["start_seed"] == 30000
+    assert direct["test"]["episodes"] == 100
+    assert direct["train"]["total_timesteps"] == 500000
+    assert curriculum["curriculum"]["total_timesteps"] == 500000
+    assert "steering_limit" not in direct["metadrive"]
+    assert "steering_limit" not in curriculum["metadrive"]
+
+
+def test_curriculum_uses_early_stage_savings_on_the_final_stage():
+    config = load_yaml("configs/sac_phase2_curriculum.yaml")
+    stages = validate_curriculum_config(config)
+
+    assert curriculum_stage_budget(config, stages[0], 0) == 100000
+    assert curriculum_stage_budget(config, stages[1], 75000) == 150000
+    assert curriculum_stage_budget(config, stages[2], 200000) == 300000
+    assert stage_config(config, stages[0])["metadrive"]["map"] == "C"
+    assert stage_config(config, stages[1])["metadrive"]["map"] == "SC"
 
 
 class _FakeRewardEnvironment(gym.Env):
@@ -311,6 +451,7 @@ def test_episode_metrics_capture_full_action_behavior():
     )
 
     assert row["mean_abs_steering"] == 2.0 / 3.0
+    assert row["steering_std"] > 0.0
     assert row["steering_saturation_rate"] == 2.0 / 3.0
     assert row["throttle_rate"] == 1.0 / 3.0
     assert row["brake_rate"] == 1.0 / 3.0
@@ -378,12 +519,12 @@ def test_project_python_stays_free_of_type_hints_and_future_annotations():
                         arguments.append(node.args.vararg)
                     if node.args.kwarg is not None:
                         arguments.append(node.args.kwarg)
-                    assert all(argument.annotation is None for argument in arguments), (
-                        f"Parameter type hint found in {path}"
-                    )
+                    assert all(
+                        argument.annotation is None for argument in arguments
+                    ), f"Parameter type hint found in {path}"
                 assert not isinstance(node, ast.AnnAssign), f"Variable type hint found in {path}"
                 if isinstance(node, ast.ImportFrom) and node.module == "__future__":
                     imported = {name.name for name in node.names}
-                    assert "annotations" not in imported, (
-                        f"Future annotations import found in {path}"
-                    )
+                    assert (
+                        "annotations" not in imported
+                    ), f"Future annotations import found in {path}"

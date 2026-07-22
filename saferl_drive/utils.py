@@ -268,9 +268,13 @@ def read_latest_run(output_dir, algo_or_name):
 
 
 def append_phase1_manifest(output_dir, record):
+    return append_run_manifest(output_dir, "phase1", record)
+
+
+def append_run_manifest(output_dir, phase, record):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = output_dir / "phase1_manifest.jsonl"
+    manifest_path = output_dir / f"{phase}_manifest.jsonl"
     entry = dict(record)
     entry.setdefault("timestamp_utc", utc_timestamp())
     with manifest_path.open("a", encoding="utf-8") as file:
@@ -392,8 +396,8 @@ def plot_eval_summary(eval_csv, out_dir=None):
     return paths
 
 
-def plot_comparison_rows(rows, out_path):
-    """Plot the four headline Phase-1 metrics for multiple agents."""
+def plot_comparison_rows(rows, out_path, title="Held-out test comparison"):
+    """Plot the four headline metrics for multiple agents."""
     plt = _plotter()
 
     frame = pd.DataFrame(rows)
@@ -430,7 +434,7 @@ def plot_comparison_rows(rows, out_path):
     plt.xticks(positions, [labels[metric] for metric in metrics])
     plt.ylim(0, 1)
     plt.ylabel("Rate / fraction")
-    plt.title("Phase-1 held-out test comparison")
+    plt.title(title)
     plt.legend()
     plt.tight_layout()
     plt.savefig(out_path, dpi=180)
@@ -449,8 +453,13 @@ def compare_eval_summaries(summary_paths, out_path):
     return plot_comparison_rows(rows, out_path)
 
 
-def plot_phase1_training_returns(run_dirs, out_path, smoothing=20):
-    """Create one optional training-return plot for PPO and SAC."""
+def plot_phase1_training_returns(
+    run_dirs,
+    out_path,
+    smoothing=20,
+    title="PPO and SAC training returns",
+):
+    """Create one optional combined training-return plot."""
     plt = _plotter()
 
     plotted = False
@@ -471,7 +480,7 @@ def plot_phase1_training_returns(run_dirs, out_path, smoothing=20):
     out_path.parent.mkdir(parents=True, exist_ok=True)
     plt.xlabel("Episode")
     plt.ylabel("Return")
-    plt.title("PPO and SAC training returns")
+    plt.title(title)
     plt.legend()
     plt.tight_layout()
     plt.savefig(out_path, dpi=180)

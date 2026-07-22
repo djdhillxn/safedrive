@@ -259,7 +259,7 @@ def refresh_latest_pointers(local_runs, dry_run=False):
         if not run_dir.is_dir():
             continue
         metadata = read_metadata(run_dir)
-        if not metadata or metadata.get("status") != "complete":
+        if not metadata or metadata.get("status") not in {"complete", "paused", "failed_gate"}:
             continue
         name = pointer_name(metadata)
         if name:

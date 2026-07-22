@@ -86,6 +86,26 @@ def test_sync_rebuilds_full_and_pilot_pointers(tmp_path):
     )
 
 
+def test_sync_rebuilds_pointer_for_a_paused_curriculum(tmp_path):
+    drive_project = tmp_path / "SafeDrive"
+    drive_runs = drive_project / "runs"
+    local_runs = tmp_path / "runs"
+    drive_runs.mkdir(parents=True)
+    make_run(
+        drive_runs,
+        "20260106_000000_curriculum",
+        "paused",
+        "sac",
+        latest_name="sac_phase2_curriculum_seed0",
+    )
+
+    sync_runs(drive_project, local_runs)
+
+    assert (local_runs / "latest_sac_phase2_curriculum_seed0.txt").read_text(
+        encoding="utf-8"
+    ) == "runs/20260106_000000_curriculum\n"
+
+
 def test_sync_does_not_delete_local_only_files(tmp_path):
     drive_project = tmp_path / "SafeDrive"
     drive_runs = drive_project / "runs"

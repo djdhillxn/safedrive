@@ -126,8 +126,10 @@ def _episode_row(
             {
                 "mean_steering": float(np.mean(steering)),
                 "mean_abs_steering": float(np.mean(np.abs(steering))),
+                "steering_std": float(np.std(steering)),
                 "steering_saturation_rate": float(np.mean(np.abs(steering) >= 0.95)),
                 "mean_throttle_brake": float(np.mean(throttle_brake)),
+                "throttle_brake_std": float(np.std(throttle_brake)),
                 "throttle_rate": float(np.mean(throttle_brake > 0.05)),
                 "brake_rate": float(np.mean(throttle_brake < -0.05)),
             }
@@ -335,8 +337,10 @@ def summarize_metrics(frame):
         "shaping_penalty_sum": "mean_shaping_penalty",
         "mean_steering": "mean_steering",
         "mean_abs_steering": "mean_abs_steering",
+        "steering_std": "mean_steering_std",
         "steering_saturation_rate": "steering_saturation_rate",
         "mean_throttle_brake": "mean_throttle_brake",
+        "throttle_brake_std": "mean_throttle_brake_std",
         "throttle_rate": "throttle_rate",
         "brake_rate": "brake_rate",
         "mean_action_change": "mean_action_change",
@@ -381,8 +385,10 @@ def comparison_summary_row(name, summary, run_dir=None, summary_path=None):
         "mean_shaping_penalty",
         "mean_steering",
         "mean_abs_steering",
+        "mean_steering_std",
         "steering_saturation_rate",
         "mean_throttle_brake",
+        "mean_throttle_brake_std",
         "throttle_rate",
         "brake_rate",
         "mean_action_change",
@@ -397,11 +403,14 @@ def comparison_summary_row(name, summary, run_dir=None, summary_path=None):
     return row
 
 
-def save_eval_outputs(frame, out_dir, prefix="eval"):
+def save_eval_outputs(frame, out_dir, prefix="eval", summary_metadata=None):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = out_dir / f"{prefix}_episodes.csv"
     json_path = out_dir / f"{prefix}_summary.json"
     frame.to_csv(csv_path, index=False)
-    write_json(summarize_metrics(frame), json_path)
+    summary = summarize_metrics(frame)
+    if summary_metadata:
+        summary.update(summary_metadata)
+    write_json(summary, json_path)
     return {"episodes_csv": csv_path, "summary_json": json_path}

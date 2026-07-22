@@ -10,12 +10,13 @@ from saferl_drive.config import (
     apply_dotlist_overrides,
     get_evaluation_config,
     load_yaml,
+    make_experiment_fingerprint,
     make_eval_metadrive_config,
 )
 from saferl_drive.envs import find_vecnormalize_path, make_vec_env
 from saferl_drive.evaluation import evaluate_policy_vecenv, save_eval_outputs
 from saferl_drive.utils import (
-    append_phase1_manifest,
+    append_run_manifest,
     log_system_info,
     plot_eval_summary,
     read_json,
@@ -118,6 +119,11 @@ def main():
         logger.info("Loading %s model on %s: %s", args.model, load_device, model_path)
         model = algorithm_class.load(model_path, env=environment, device=load_device)
         episode_count = int(args.episodes or evaluation.get("episodes", 50))
+        fingerprint = make_experiment_fingerprint(
+            config,
+            split=args.split,
+            episodes=episode_count,
+        )
         logger.info(
             "Evaluating %s episodes on the %s split beginning at seed %s.",
             episode_count,
@@ -133,7 +139,15 @@ def main():
             start_seed=start_seed,
             num_scenarios=int(evaluation.get("num_scenarios", episode_count)),
         )
-        paths = save_eval_outputs(frame, run_dir / "eval", prefix=prefix)
+        paths = save_eval_outputs(
+            frame,
+            run_dir / "eval",
+            prefix=prefix,
+            summary_metadata={
+                "evaluation_split": args.split,
+                "experiment_fingerprint": fingerprint,
+            },
+        )
         plot_paths = plot_eval_summary(paths["episodes_csv"], run_dir / "plots")
         if args.split == "test":
             metadata_path = run_dir / "run_metadata.json"
@@ -148,16 +162,22 @@ def main():
                         "start_seed": start_seed,
                         "num_scenarios": int(evaluation.get("num_scenarios", episode_count)),
                         "prefix": prefix,
+                        "experiment_fingerprint": fingerprint,
                     }
                 )
                 metadata.setdefault("outputs", {})["test_eval_csv"] = str(paths["episodes_csv"])
                 metadata["outputs"]["test_eval_summary"] = str(paths["summary_json"])
                 write_json(metadata, metadata_path)
                 experiment = config.get("experiment", {})
-                append_phase1_manifest(
+                phase = str(experiment.get("phase", "phase1"))
+                latest_name = str(experiment.get("latest_name", algorithm_name)).format(
+                    seed=experiment.get("seed", 0)
+                )
+                append_run_manifest(
                     experiment.get("output_dir", "runs"),
+                    phase,
                     {
-                        "kind": experiment.get("latest_name", algorithm_name),
+                        "kind": latest_name,
                         "algorithm": algorithm_name,
                         "status": "test_complete",
                         "run_dir": str(run_dir),

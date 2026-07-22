@@ -7,27 +7,50 @@
 \usepackage{xcolor}
 \emergencystretch=2em
 
-\title{SafeRL-Drive: Reinforcement Learning for Autonomous Driving in MetaDrive}
+\title{SafeRL-Drive: Curriculum Learning for Procedural Driving in MetaDrive}
 \author{Dheeraj Dhillon}
 \date{\today}
 
-\newcommand{\PpoSuccess}{TODO}
-\newcommand{\SacSuccess}{TODO}
-\newcommand{\IdmSuccess}{TODO}
-\newcommand{\PpoCollision}{TODO}
-\newcommand{\SacCollision}{TODO}
-\newcommand{\IdmCollision}{TODO}
-\newcommand{\PpoOffRoad}{TODO}
-\newcommand{\SacOffRoad}{TODO}
-\newcommand{\IdmOffRoad}{TODO}
-\newcommand{\PpoCompletion}{TODO}
-\newcommand{\SacCompletion}{TODO}
-\newcommand{\IdmCompletion}{TODO}
+% Phase-1 learned-policy values are known.  The IDM cells remain visibly pending
+% until the exact held-out test is rerun and the fingerprint-checked comparison
+% generates reports/generated_phase1_results.tex.
+\newcommand{\PpoSuccess}{100.0\%}
+\newcommand{\SacSuccess}{100.0\%}
+\newcommand{\IdmSuccess}{Pending}
+\newcommand{\PpoCollision}{0.0\%}
+\newcommand{\SacCollision}{0.0\%}
+\newcommand{\IdmCollision}{Pending}
+\newcommand{\PpoOffRoad}{0.0\%}
+\newcommand{\SacOffRoad}{0.0\%}
+\newcommand{\IdmOffRoad}{Pending}
+\newcommand{\PpoCompletion}{96.1\%}
+\newcommand{\SacCompletion}{95.7\%}
+\newcommand{\IdmCompletion}{Pending}
 
-\newcommand{\missingfigure}{
-  \fbox{\parbox[c][1.7in][c]{0.9\linewidth}{\centering
-  Phase-1 comparison figure placeholder.\\
-  Run \texttt{python -m scripts.compare\_runs --phase1}.}}
+\newcommand{\DirectSuccess}{Pending}
+\newcommand{\CurriculumSuccess}{Pending}
+\newcommand{\DirectCollision}{Pending}
+\newcommand{\CurriculumCollision}{Pending}
+\newcommand{\DirectOffRoad}{Pending}
+\newcommand{\CurriculumOffRoad}{Pending}
+\newcommand{\DirectCompletion}{Pending}
+\newcommand{\CurriculumCompletion}{Pending}
+
+\newif\ifphaseoneresults
+\newif\ifphasetworesults
+\IfFileExists{generated_phase1_results.tex}{
+  \phaseoneresultstrue\input{generated_phase1_results.tex}
+}{
+  \IfFileExists{reports/generated_phase1_results.tex}{
+    \phaseoneresultstrue\input{reports/generated_phase1_results.tex}
+  }{\phaseoneresultsfalse}
+}
+\IfFileExists{generated_phase2_results.tex}{
+  \phasetworesultstrue\input{generated_phase2_results.tex}
+}{
+  \IfFileExists{reports/generated_phase2_results.tex}{
+    \phasetworesultstrue\input{reports/generated_phase2_results.tex}
+  }{\phasetworesultsfalse}
 }
 
 \begin{document}
@@ -35,95 +58,56 @@
 \maketitle
 
 \begin{abstract}
-SafeRL-Drive is a reproducible student study of closed-loop reinforcement learning built
-with MetaDrive and Stable-Baselines3. Phase 1 trains PPO and SAC on a
-single traffic-free straight-road task, selects checkpoints on fixed validation seeds,
-evaluates frozen policies on disjoint test seeds, and compares them with MetaDrive's
-rule-based IDM policy. The benchmark records
-success, collision, off-road, timeout, route-completion, return, cost, speed, and episode
-length metrics while retaining the configurations, logs, models, and plots needed to
-reproduce each result. Numerical results in this scaffold are intentionally left as
-placeholders until the final Colab experiments are complete.
+SafeRL-Drive is a reproducible student study of closed-loop reinforcement learning in
+MetaDrive. Phase 1 established a trustworthy training and evaluation pipeline on a
+traffic-free straight road. Frozen PPO and SAC policies each achieved 100\% success on 20
+held-out episodes, although action analysis showed that PPO solved this simple task with a
+constant open-loop command while SAC learned state-dependent continuous control. Phase 2
+therefore focuses on SAC and asks whether a staged road-geometry curriculum improves
+generalization to unseen three-block procedural maps over equal-budget direct training.
+Resolved configurations, strict experiment fingerprints, logs, per-episode metrics,
+plots, videos, and Google Drive artifacts make each claim auditable.
 \end{abstract}
 
 \section{Introduction}
-Closed-loop simulation exposes a driving policy to the consequences of its own actions.
-This makes it useful for studying control failures that are hidden by one-step prediction
-metrics. SafeRL-Drive focuses on a deliberately small question: can two standard deep
-reinforcement-learning algorithms reliably learn a basic driving task under
-the same observations, rewards, and evaluation metrics? MetaDrive supplies the
-configurable simulator used for this study \cite{li2022metadrive}.
+Closed-loop simulation evaluates a driving policy through the consequences of its own
+actions. MetaDrive is particularly appropriate because its procedural generator can create
+diverse road structures and disjoint scenario sets for generalization experiments
+\cite{li2022metadrive}. The project began with PPO and SAC because they provide standard
+on-policy and off-policy learning controls \cite{schulman2017ppo,haarnoja2018sac}. The aim
+is not production autonomy. It is a compact, reproducible experiment that demonstrates
+learning, exposes failure modes honestly, and tests one meaningful generalization
+hypothesis.
 
 \section{Scope and Success Criteria}
-The project is an engineering proof of learning, not a claim of production autonomous
-driving. Phase 1 is complete only if the frozen best checkpoint for each learned agent
-achieves at least 80\% success and 90\% mean route completion, with no more than 10\%
-collision, off-road, and timeout outcomes on 20 untouched test episodes. The required deliverables
-are reproducible PPO, SAC, and IDM artifacts; auditable evaluation tables; learning and
-outcome plots; one rollout video per learned agent; and a concise report. Curved roads,
-procedural-map generalization, traffic, image observations, and explicit safe-RL methods
-are ordered extensions, not hidden prerequisites for the Phase-1 claim. PPO uses a
-$3\times3$ discrete steering/throttle grid, while SAC is continuous with steering limited
-to $[-0.1,0.1]$. These are two learning controls, not a fair algorithm-ranking experiment;
-continuous PPO and unrestricted SAC are explicit robustness extensions.
+Phase 1 is a pipeline and basic-control gate. A frozen policy qualifies with at least 80\%
+success and 90\% mean route completion, with no more than 10\% collision, off-road, or
+timeout outcomes on 20 untouched episodes. Phase 2 changes one main dimension: road
+geometry. Its target uses three procedurally generated blocks, full continuous control,
+no training traffic, 100 training scenarios, 25 validation scenarios, and 100 disjoint
+test scenarios. The same outcome thresholds are retained, and a train-to-test success gap
+above 15 percentage points is treated as weak generalization.
 
-\section{Problem Setup}
-The agent receives MetaDrive's bounded vector observation and produces steering and
-throttle/brake commands. Phase 1 uses one straight topology, fixed spawning, no traffic,
-a 500-step horizon, and MetaDrive's reference reward scale. Training begins at seed 0.
-Validation uses ten seeds beginning at 1000 and is used only for checkpoint selection.
-Final evaluation uses 20 seeds beginning at 4000 and is not consulted until the checkpoint
-is frozen. Straight-block parameters may vary with the seed, but road topology and the
-no-traffic setting remain fixed. The split therefore must not be described as broad
-procedural generalization. Seeds 3000--3019 were consumed during local diagnosis.
+Image observations, real-world scenario replay, multi-agent learning, vehicle-dynamics
+randomization, obstacle curricula, and explicit safe-RL algorithms remain outside Phase 2.
+Light traffic is used only as a zero-shot stress test after the traffic-free policy is
+frozen.
 
-\section{Environment and Agents}
-The learning agents are Proximal Policy Optimization (PPO) \cite{schulman2017ppo} and
-Soft Actor-Critic (SAC) \cite{haarnoja2018sac}, implemented through
-Stable-Baselines3 \cite{raffin2021sb3}. Both use the same MLP architecture, but their
-documented action interfaces differ. PPO uses MetaDrive's beginner $3\times3$ discrete
-steering/throttle grid, four collection processes, and CPU learning.
-SAC uses one environment, GPU acceleration when available, and no saved replay buffer.
-Its entropy coefficient is fixed after automatic tuning collapsed during a diagnostic;
-fixed entropy alone did not solve unrestricted steering exploration, so its straight-road
-control limits steering to $[-0.1,0.1]$.
-MetaDrive's \texttt{IDMPolicy} is evaluated without training as the rule-based reference.
+\section{Phase-1 Setup}
+Both learned agents used MetaDrive's bounded vector observation and reference reward.
+Training used seed 0 on one straight topology with fixed spawning, no traffic, and a
+500-step horizon. Validation used seeds 1000--1009. Final testing used seeds 4000--4019
+and was not consulted during checkpoint selection. PPO used a $3\times3$ discrete
+steering/throttle grid and CPU learning. SAC used continuous throttle/brake and steering
+limited to $[-0.1,0.1]$ for the straight-road gate. Because these policy-facing action
+interfaces differ, Phase 1 is a descriptive control matrix rather than a fair algorithm
+ranking.
 
-\section{Experimental Design}
-Each learning algorithm receives at most 100,000 environment timesteps. Validation runs
-every 25,000 steps. When a checkpoint reaches 80\% success and 90\% route completion while
-keeping collision, off-road, and timeout rates at or below 10\%, it is saved before training stops.
-Otherwise, the run ends at the budget and is diagnosed rather
-than silently extended. The best checkpoint is selected lexicographically by success,
-route completion, lower off-road/collision/timeout rates, and return. Only the frozen
-winner receives held-out testing. The smoke test is excluded from reported results.
-Callback evaluation seeds only its simulator subprocess; it does not reset Python, NumPy,
-or PyTorch in the parent training process.
-
-MetaDrive's reference dense progress, speed, and terminal rewards are used without custom
-SafeDrive shaping. This is intentional: the earlier long-horizon reward made braking and
-stalling locally attractive, while continuous PPO's default exploration saturated steering.
-The bounded observation is used directly. SAC's explicit steering bound prevents its replay
-buffer from filling with full-lock inputs on a straight road; PPO uses the documented
-discrete beginner abstraction. Horizon exhaustion
-is treated as an artificial Gymnasium truncation for value learning, while timeout remains
-a reported task failure.
-
-\section{Metrics}
-The headline metrics are success rate, collision rate, off-road rate, timeout rate, and
-mean route completion. Mean return and episode length summarize task performance and
-rollout duration. Mean safety cost and speed provide additional context. Success rate is
-accompanied by a 95\% Wilson confidence interval. Per-episode CSV files retain scenario
-seeds, base and shaped returns, full-rollout action statistics, and final simulator
-information so aggregate values remain auditable.
-
-\section{Results}
-Table~\ref{tab:phase1-results} is filled manually from
-\texttt{runs/phase1\_comparison.csv} after the final runs complete.
-
+\section{Phase-1 Results}
 \begin{table}[h]
   \centering
-  \caption{Performance on the held-out fixed-road test episodes.}
+  \caption{Held-out fixed-straight-road outcomes. The IDM row is populated only by the
+  fingerprint-checked comparison generated from the exact 20-episode test.}
   \label{tab:phase1-results}
   \begin{tabular}{lcccc}
     \toprule
@@ -136,41 +120,114 @@ Table~\ref{tab:phase1-results} is filled manually from
   \end{tabular}
 \end{table}
 
+PPO achieved 100\% success, 96.1\% route completion, and zero reported failures on the
+20 held-out episodes. Every deterministic action was exactly zero steering and full
+throttle. Its sampled training rollouts remained noisy at the stopping checkpoint, with
+3\% rolling success and 96\% off-road outcomes. The result proves that the discrete
+pipeline can select a successful deterministic command, but not that PPO learned a robust
+feedback controller.
+
+SAC also achieved 100\% success and zero failures, with 95.7\% route completion. Its
+sampled training success rose from 30\% at 30,000 steps to 58\%, 93\%, and 100\% by
+45,000 steps. Held-out actions included small steering corrections, throttle modulation,
+and occasional braking. SAC therefore supplies the better evidence of state-dependent
+control and is the sole learned algorithm advanced to Phase 2.
+
+For either 20-of-20 result, the 95\% Wilson interval for the underlying episode success
+probability is 83.9--100\%. The point estimates pass the predeclared gate, but the interval
+and single training seed rule out a strong robustness claim.
+
+The latest IDM reproducibility gate ran validation seeds 1000--1009 twice. Both passes
+produced identical per-scenario outcomes, 100\% success, 95.4\% route completion, and zero
+failures. This verifies deterministic baseline execution. It is not substituted for the
+held-out test. The comparison tool now refuses summaries whose map, traffic, horizon,
+reward, action interface, or evaluation split is incompatible.
+
+\ifphaseoneresults
 \begin{figure}[h]
   \centering
-  \IfFileExists{runs/phase1_comparison.png}{
-    \includegraphics[width=0.92\linewidth]{runs/phase1_comparison.png}
+  \IfFileExists{../runs/phase1_comparison.png}{
+    \includegraphics[width=0.92\linewidth]{../runs/phase1_comparison.png}
   }{
-    \IfFileExists{../runs/phase1_comparison.png}{
-      \includegraphics[width=0.92\linewidth]{../runs/phase1_comparison.png}
-    }{\missingfigure}
+    \includegraphics[width=0.92\linewidth]{runs/phase1_comparison.png}
   }
-  \caption{IDM, PPO, and SAC on the four headline held-out test metrics.}
-  \label{fig:phase1-comparison}
+  \caption{Fingerprint-checked Phase-1 held-out task outcomes. The controller interfaces
+  differ, so the plot is descriptive rather than an algorithm ranking.}
 \end{figure}
+\fi
 
-\section{Discussion}
-The final discussion must distinguish task return from driving safety. A controller can
-make progress while still leaving the road, and a conservative policy can avoid incidents
-by timing out. The rule-based baseline helps determine whether learned behavior is merely
-active or completes the task. Strong results on the fixed straight road demonstrate
-pipeline competence and basic longitudinal/lateral control only.
+\section{Phase-2 Research Design}
+Phase 2 tests whether a structured curriculum improves procedural-road learning. Both
+conditions use Stable-Baselines3 SAC \cite{raffin2021sb3}, the same $[256,256]$ MLP,
+full $[-1,1]$ steering and throttle/brake actions, identical rewards, a maximum of 500,000
+environment steps, and the same final validation and test scenarios.
 
-\section{Limitations and Future Work}
-Phase 1 uses one training run per algorithm, a fixed road geometry, state-vector
-observations, one simulator, and a small evaluation budget. Results therefore cannot
-establish procedural generalization or statistical superiority. The next experiment changes
-only the action interface: continuous PPO and unrestricted SAC steering on the same straight
-road. The following experiment changes only the map to a fixed curve. A small traffic-free
-procedural set follows only after both agents
-pass that gate; traffic and explicit safety mechanisms remain later work.
+\paragraph{Direct SAC.}
+The control is trained from scratch on 100 three-block procedural scenarios for the full
+budget or until the target validation gate is reached.
+
+\paragraph{Curriculum SAC.}
+The experimental policy begins on curved roads (\texttt{C}, at most 100,000 steps), then
+straight-plus-curve roads (\texttt{SC}, at most 150,000 steps), and finally uses all
+remaining steps on random three-block maps. Each prerequisite stage must reach 90\%
+success and route completion with at most 10\% collision, off-road, and timeout outcomes.
+Model parameters and the SAC replay buffer persist across stages. Curriculum learning has
+previously improved performance and sample efficiency across driving tasks of increasing
+road complexity \cite{ozturk2021curriculum}; this experiment tests the idea in MetaDrive
+under an equal total budget.
+
+One direct and one curriculum seed-0 pilot are run first. Confirmation seeds 1 and 2 are
+launched only if at least one pilot reaches 50\% success or 80\% route completion. A
+curriculum advantage is claimed only for an improvement of at least ten percentage points
+in success, or similar success with at least 20\% fewer combined collision and off-road
+outcomes, with a consistent direction across the confirmation seeds.
+
+\section{Phase-2 Results}
+\begin{table}[h]
+  \centering
+  \caption{Unseen three-block procedural-road results, averaged across completed training
+  seeds. Values remain pending until the strict fingerprint-checked comparison runs.}
+  \label{tab:phase2-results}
+  \begin{tabular}{lcccc}
+    \toprule
+    Condition & Success & Collision & Off-road & Route completion \\
+    \midrule
+    Direct SAC & \DirectSuccess & \DirectCollision & \DirectOffRoad & \DirectCompletion \\
+    Curriculum SAC & \CurriculumSuccess & \CurriculumCollision &
+      \CurriculumOffRoad & \CurriculumCompletion \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\ifphasetworesults
+\begin{figure}[h]
+  \centering
+  \IfFileExists{../runs/phase2_comparison.png}{
+    \includegraphics[width=0.92\linewidth]{../runs/phase2_comparison.png}
+  }{
+    \includegraphics[width=0.92\linewidth]{runs/phase2_comparison.png}
+  }
+  \caption{Strictly compatible direct-versus-curriculum SAC results on unseen procedural
+  roads.}
+\end{figure}
+\fi
+
+\section{Limitations}
+Phase 1 used one training seed per algorithm and a task that admitted an open-loop
+solution. Phase 2 remains state-vector based, traffic-free during training, and limited to
+one simulator and two SAC training conditions. One hundred test episodes quantify
+episode-level uncertainty, while up to three training seeds provide only a small estimate
+of optimization variability. The zero-shot traffic test measures robustness but does not
+establish traffic competence or safety.
 
 \section{Conclusion}
-SafeRL-Drive connects training, held-out evaluation, rule-based comparison, visualization,
-video, and artifact logging in one reproducible workflow. Its bounded Phase-1 claim and
-ordered difficulty ladder prevent weak broad experiments from being mistaken for working
-autonomous driving. The final report will replace the placeholders with measured PPO, SAC,
-and IDM results from the saved comparison files.
+Phase 1 converted an initially unreliable experiment into a reproducible control gate and
+showed why headline success alone is insufficient: action behavior revealed that PPO's
+perfect score was trivial, whereas SAC learned a responsive controller. Phase 2 returns to
+the project's original procedural-generalization objective through one controlled
+direct-versus-curriculum experiment. The result will be useful whether positive or
+negative because the task, budget, splits, fingerprints, and stopping rules are fixed in
+advance.
 
 \bibliographystyle{plain}
 \bibliography{references}

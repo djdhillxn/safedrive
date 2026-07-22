@@ -7,13 +7,14 @@ from saferl_drive.config import (
     apply_dotlist_overrides,
     get_evaluation_config,
     load_yaml,
+    make_experiment_fingerprint,
     make_eval_metadrive_config,
     save_yaml,
 )
 from saferl_drive.envs import make_vec_env
 from saferl_drive.evaluation import evaluate_policy_vecenv, save_eval_outputs, summarize_metrics
 from saferl_drive.utils import (
-    append_phase1_manifest,
+    append_run_manifest,
     log_system_info,
     make_run_dir,
     plot_eval_summary,
@@ -62,6 +63,11 @@ def main():
     logging_config = config.get("logging", {})
     output_dir = experiment.get("output_dir", "runs")
     seed = int(experiment.get("seed", 0))
+    phase = str(experiment.get("phase", "phase1"))
+    baseline_latest_prefix = experiment.get("baseline_latest_prefix")
+    pointer_name = (
+        f"{baseline_latest_prefix}_{args.policy}" if baseline_latest_prefix else args.policy
+    )
     run_dir = make_run_dir(output_dir, run_name, None, seed)
     logger = setup_logging(
         run_dir / "logs" / f"{args.policy}_baseline.log",
@@ -78,6 +84,7 @@ def main():
         "config_path": str(args.config),
         "run_dir": str(run_dir),
         "algorithm": policy_class_name,
+        "latest_name": pointer_name,
         "seed": seed,
         "evaluation": {
             "episodes": episode_count,
@@ -135,7 +142,22 @@ def main():
             start_seed=start_seed,
             num_scenarios=int(evaluation.get("num_scenarios", episode_count)),
         )
-        paths = save_eval_outputs(frame, run_dir / "eval", prefix=prefix)
+        fingerprint = make_experiment_fingerprint(
+            config,
+            split=args.split,
+            episodes=episode_count,
+            controller=policy_class_name,
+        )
+        paths = save_eval_outputs(
+            frame,
+            run_dir / "eval",
+            prefix=prefix,
+            summary_metadata={
+                "evaluation_split": args.split,
+                "experiment_fingerprint": fingerprint,
+            },
+        )
+        metadata["evaluation"]["experiment_fingerprint"] = fingerprint
         environment.close()
         environment = None
         repeat_paths = None
@@ -168,6 +190,10 @@ def main():
                 repeat_frame,
                 run_dir / "eval",
                 prefix=f"{prefix}_repeat",
+                summary_metadata={
+                    "evaluation_split": args.split,
+                    "experiment_fingerprint": fingerprint,
+                },
             )
             outcome_columns = [
                 "env_seed",
@@ -250,14 +276,15 @@ def main():
         metadata["status"] = "complete"
         metadata["completed_at_utc"] = utc_timestamp()
         if args.split == "test":
-            pointer = update_latest_run_file(output_dir, args.policy, run_dir)
+            pointer = update_latest_run_file(output_dir, pointer_name, run_dir)
             metadata["outputs"]["latest_pointer"] = str(pointer)
         write_json(metadata, metadata_path)
         if args.split == "test":
-            manifest = append_phase1_manifest(
+            manifest = append_run_manifest(
                 output_dir,
+                phase,
                 {
-                    "kind": args.policy,
+                    "kind": pointer_name,
                     "algorithm": policy_class_name,
                     "status": "complete",
                     "run_dir": str(run_dir),
@@ -272,10 +299,11 @@ def main():
         metadata["error"] = str(error)
         write_json(metadata, metadata_path)
         if args.split == "test":
-            append_phase1_manifest(
+            append_run_manifest(
                 output_dir,
+                phase,
                 {
-                    "kind": args.policy,
+                    "kind": pointer_name,
                     "algorithm": policy_class_name,
                     "status": "failed",
                     "run_dir": str(run_dir),

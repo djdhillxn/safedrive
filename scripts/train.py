@@ -22,6 +22,7 @@ from saferl_drive.config import (
     apply_dotlist_overrides,
     get_evaluation_config,
     load_yaml,
+    make_experiment_fingerprint,
     make_eval_metadrive_config,
     save_yaml,
 )
@@ -33,7 +34,7 @@ from saferl_drive.evaluation import (
     summarize_metrics,
 )
 from saferl_drive.utils import (
-    append_phase1_manifest,
+    append_run_manifest,
     log_system_info,
     make_run_dir,
     plot_eval_summary,
@@ -207,6 +208,9 @@ class _SuccessFirstValidationCallback(BaseCallback):
         stop_max_collision_rate=None,
         stop_max_out_of_road_rate=None,
         stop_max_timeout_rate=None,
+        eval_prefix="validation",
+        model_filename="best_model",
+        summary_metadata=None,
     ):
         super().__init__(verbose=0)
         self.eval_env = eval_env
@@ -222,7 +226,11 @@ class _SuccessFirstValidationCallback(BaseCallback):
         self.stop_max_collision_rate = stop_max_collision_rate
         self.stop_max_out_of_road_rate = stop_max_out_of_road_rate
         self.stop_max_timeout_rate = stop_max_timeout_rate
+        self.eval_prefix = str(eval_prefix)
+        self.model_filename = str(model_filename)
+        self.summary_metadata = dict(summary_metadata or {})
         self.best_score = None
+        self.target_reached = False
         self.history = []
 
     def _on_step(self):
@@ -240,8 +248,13 @@ class _SuccessFirstValidationCallback(BaseCallback):
             num_scenarios=self.num_scenarios,
         )
         summary = summarize_metrics(frame)
-        step_prefix = f"validation_{self.num_timesteps:09d}"
-        save_eval_outputs(frame, self.run_dir / "eval", prefix=step_prefix)
+        step_prefix = f"{self.eval_prefix}_{self.num_timesteps:09d}"
+        save_eval_outputs(
+            frame,
+            self.run_dir / "eval",
+            prefix=step_prefix,
+            summary_metadata=self.summary_metadata,
+        )
 
         row = {"timesteps": int(self.num_timesteps), **summary}
         self.history.append(row)
@@ -257,7 +270,7 @@ class _SuccessFirstValidationCallback(BaseCallback):
                 ],
                 "evaluations": self.history,
             },
-            self.run_dir / "eval" / "validation_history.json",
+            self.run_dir / "eval" / f"{self.eval_prefix}_history.json",
         )
 
         for name in [
@@ -305,11 +318,27 @@ class _SuccessFirstValidationCallback(BaseCallback):
 
         if is_new_best:
             self.best_score = score
-        self.model.save(self.run_dir / "models" / "best_model")
+        self.model.save(self.run_dir / "models" / self.model_filename)
         vecnormalize = self.model.get_vec_normalize_env()
         if vecnormalize is not None:
-            vecnormalize.save(self.run_dir / "models" / "best_vecnormalize.pkl")
-        save_eval_outputs(frame, self.run_dir / "eval", prefix="best_validation")
+            vecnormalize_name = (
+                "best_vecnormalize.pkl"
+                if self.model_filename == "best_model"
+                else f"{self.model_filename}_vecnormalize.pkl"
+            )
+            vecnormalize.save(self.run_dir / "models" / vecnormalize_name)
+        best_prefix = f"best_{self.eval_prefix}"
+        save_eval_outputs(
+            frame,
+            self.run_dir / "eval",
+            prefix=best_prefix,
+            summary_metadata=self.summary_metadata,
+        )
+        selection_name = (
+            "best_checkpoint_selection.json"
+            if self.eval_prefix == "validation" and self.model_filename == "best_model"
+            else f"best_{self.eval_prefix}_selection.json"
+        )
         write_json(
             {
                 "timesteps": int(self.num_timesteps),
@@ -317,9 +346,10 @@ class _SuccessFirstValidationCallback(BaseCallback):
                 "qualified": target_reached,
                 "summary": summary,
             },
-            self.run_dir / "eval" / "best_checkpoint_selection.json",
+            self.run_dir / "eval" / selection_name,
         )
         if target_reached:
+            self.target_reached = True
             self.run_logger.info(
                 "Learning target reached at %s steps; stopping after saving the checkpoint.",
                 self.num_timesteps,
@@ -378,7 +408,7 @@ def main():
         "run_dir": str(run_dir),
         "algorithm": algorithm_name,
         "experiment_name": experiment.get("name", "metadrive_mvp"),
-        "latest_name": experiment.get("latest_name", algorithm_name),
+        "latest_name": str(experiment.get("latest_name", algorithm_name)).format(seed=seed),
         "seed": seed,
         "training": {
             "total_timesteps": int(training.get("total_timesteps", 500_000)),
@@ -423,6 +453,12 @@ def main():
 
         eval_config = make_eval_metadrive_config(config, "validation")
         eval_start_seed = int(validation.get("start_seed", 1000))
+        validation_fingerprint = make_experiment_fingerprint(
+            config,
+            split="validation",
+            episodes=int(validation.get("episodes", training.get("eval_episodes", 20))),
+        )
+        metadata["validation"]["experiment_fingerprint"] = validation_fingerprint
         eval_vec_env_type = validation.get("vec_env", "subproc")
         if training.get("vec_env", "dummy") == "dummy" and eval_vec_env_type == "dummy":
             logger.warning(
@@ -514,6 +550,10 @@ def main():
                     stop_max_collision_rate=training.get("stop_max_collision_rate"),
                     stop_max_out_of_road_rate=training.get("stop_max_out_of_road_rate"),
                     stop_max_timeout_rate=training.get("stop_max_timeout_rate"),
+                    summary_metadata={
+                        "evaluation_split": "validation",
+                        "experiment_fingerprint": validation_fingerprint,
+                    },
                 )
             )
 
@@ -582,14 +622,15 @@ def main():
             logger.warning("Plot generation skipped: %s", error)
             logger.debug("Plot generation exception", exc_info=True)
 
-        pointer_name = experiment.get("latest_name", algorithm_name)
+        pointer_name = str(experiment.get("latest_name", algorithm_name)).format(seed=seed)
         latest_pointer = update_latest_run_file(output_dir, pointer_name, run_dir)
         metadata["outputs"]["latest_pointer"] = str(latest_pointer)
         metadata["status"] = "complete"
         metadata["completed_at_utc"] = utc_timestamp()
         write_json(metadata, metadata_path)
-        manifest_path = append_phase1_manifest(
+        manifest_path = append_run_manifest(
             output_dir,
+            str(experiment.get("phase", "phase1")),
             {
                 "kind": pointer_name,
                 "algorithm": algorithm_name,
@@ -605,10 +646,11 @@ def main():
         metadata["failed_at_utc"] = utc_timestamp()
         metadata["error"] = str(error)
         write_json(metadata, metadata_path)
-        append_phase1_manifest(
+        append_run_manifest(
             output_dir,
+            str(experiment.get("phase", "phase1")),
             {
-                "kind": experiment.get("latest_name", algorithm_name),
+                "kind": str(experiment.get("latest_name", algorithm_name)).format(seed=seed),
                 "algorithm": algorithm_name,
                 "status": "failed",
                 "run_dir": str(run_dir),

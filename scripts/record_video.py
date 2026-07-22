@@ -12,6 +12,7 @@ from saferl_drive.config import (
     apply_dotlist_overrides,
     get_evaluation_config,
     load_yaml,
+    make_experiment_fingerprint,
     make_eval_metadrive_config,
 )
 from saferl_drive.envs import find_vecnormalize_path, make_vec_env
@@ -43,6 +44,19 @@ def _to_uint8_frame(frame):
     if array.shape[-1] == 4:
         array = array[..., :3]
     return array
+
+
+def _raw_render_environment(vector_environment):
+    """Reach the MetaDrive instance without calling Gymnasium Wrapper.render."""
+    current = vector_environment
+    visited = set()
+    while hasattr(current, "venv") and id(current) not in visited:
+        visited.add(id(current))
+        current = current.venv
+    environments = getattr(current, "envs", None)
+    if not environments or len(environments) != 1:
+        raise RuntimeError("Video recording requires one in-process DummyVecEnv environment.")
+    return environments[0].unwrapped
 
 
 def main():
@@ -125,15 +139,15 @@ def main():
         model = algorithm_class.load(model_path, env=environment, device=load_device)
         environment.seed(video_seed)
         observation = environment.reset()
+        render_environment = _raw_render_environment(environment)
         frames = []
         final_info = {}
         for _ in range(args.steps):
-            rendered = environment.env_method(
-                "render",
+            rendered = render_environment.render(
                 mode="topdown",
                 window=False,
                 screen_size=(args.screen_size, args.screen_size),
-            )[0]
+            )
             if rendered is not None:
                 frames.append(_to_uint8_frame(rendered))
             action, _ = model.predict(observation, deterministic=True)
@@ -165,6 +179,11 @@ def main():
                 "scenario_seed": video_seed,
                 "deterministic_policy": True,
                 "random_traffic": False,
+                "experiment_fingerprint": make_experiment_fingerprint(
+                    config,
+                    split="test",
+                    episodes=1,
+                ),
                 "frames": len(frames),
                 "fps": args.fps,
                 "video": str(output),

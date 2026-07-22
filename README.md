@@ -1,4 +1,4 @@
-# SafeRL-Drive: MetaDrive MVP with PPO and SAC
+# SafeRL-Drive: Reproducible Control and Procedural Generalization in MetaDrive
 
 SafeRL-Drive is a focused student reinforcement-learning project for closed-loop driving
 in MetaDrive. Phase 1 asks a deliberately bounded question: can PPO and SAC reliably learn
@@ -6,7 +6,9 @@ lane following and route completion on one traffic-free straight
 road, under the same observations, reward, and evaluation metrics? The learned
 agents are compared with MetaDrive's rule-based IDM controller.
 
-The project uses vector observations and records success, collision, off-road, timeout,
+Phase 2 advances the credible continuous-control learner, SAC, into an equal-budget
+direct-versus-curriculum experiment on unseen three-block procedural roads. The project
+uses vector observations and records success, collision, off-road, timeout,
 route-completion, return, cost, speed, and episode-length metrics. Every experiment keeps
 its resolved config, detailed logs, metadata, and artifacts in one run directory.
 
@@ -17,10 +19,13 @@ safedrive/
 ├── configs/
 │   ├── ppo_mvp.yaml
 │   ├── sac_mvp.yaml
+│   ├── sac_phase2_direct.yaml
+│   ├── sac_phase2_curriculum.yaml
 │   └── smoke_test.yaml
 ├── notebooks/
 │   ├── colab_smoke_test.ipynb
-│   └── phase1_colab_driver.ipynb
+│   ├── phase1_colab_driver.ipynb
+│   └── phase2_colab_driver.ipynb
 ├── reports/
 │   ├── main.tex
 │   ├── surrogate_notes.tex
@@ -33,6 +38,7 @@ safedrive/
 │   └── utils.py
 ├── scripts/
 │   ├── train.py
+│   ├── train_curriculum.py
 │   ├── evaluate.py
 │   ├── evaluate_baseline.py
 │   ├── sync_drive_runs.py
@@ -168,6 +174,97 @@ sections and then continue from the required experiment. `PHASE1_TIMESTEPS` is 1
 the success-first callback may stop earlier after saving a qualifying checkpoint.
 The smaller `notebooks/colab_smoke_test.ipynb` remains available as a quick VS Code,
 Colab, GitHub, Drive, GPU, and headless-MetaDrive connection check.
+
+## Phase-2 procedural generalization experiment
+
+Use [`notebooks/phase2_colab_driver.ipynb`](notebooks/phase2_colab_driver.ipynb) for the
+complete workflow. It reuses the Phase-1 GitHub, Colab, and Drive setup, closes Phase 1
+with an exact held-out IDM run and corrected videos, and then runs one focused study:
+
+- **Direct SAC:** train from scratch on 100 three-block procedural maps.
+- **Curriculum SAC:** train on `C`, then `SC`, then three-block procedural maps while
+  preserving actor, critic, optimizer, and replay-buffer state.
+- **Shared target:** full continuous control, no training traffic, 500,000 maximum steps,
+  25 fixed validation scenarios, and 100 untouched test scenarios.
+- **Ablation:** the training sequence is the intended difference; architecture, reward,
+  action interface, final task, test split, and total budget match.
+
+Every evaluation summary stores two compatibility hashes. The task hash covers map,
+traffic, horizon, termination, reward, and evaluation split. The strict hash also covers
+the policy-facing action interface, SAC architecture, normalization, stopping target, and
+maximum training budget. Phase-2 comparison requires the strict hash to match and refuses
+to produce a plot or report macros otherwise. Phase 1 permits only a
+descriptive task-outcome matrix because its controller interfaces intentionally differ.
+
+The Phase-2 notebook order is:
+
+1. Initialize paths, inspect the GPU, mount Drive, clone/pull, restore artifacts, and
+   install the repository.
+2. Run the lightweight wiring test.
+3. Rerun IDM on Phase-1 test seeds 4000--4019, generate the fingerprint-checked Phase-1
+   table, and record corrected PPO/SAC videos.
+4. Evaluate IDM and ExpertPolicy on the Phase-2 validation task to confirm feasibility.
+5. Train and test seed-0 direct SAC.
+6. Train seed-0 curriculum SAC in three resumable stage cells. Each stage is copied to
+   Drive before the next begins.
+7. Compare the two pilots. Confirmation runs are justified only if either policy reaches
+   50% success or 80% route completion.
+8. Conditionally run seeds 1 and 2 for both conditions.
+9. Evaluate Phase-2 IDM and ExpertPolicy on the exact test task, run the learned policies'
+   zero-shot light-traffic stress tests, create videos, and generate the final comparison.
+10. Compile both LaTeX reports and sync all final artifacts to Drive.
+
+The direct command is:
+
+```bash
+python -m scripts.train \
+  --config configs/sac_phase2_direct.yaml \
+  --seed 0
+```
+
+The curriculum can run end-to-end:
+
+```bash
+python -m scripts.train_curriculum \
+  --config configs/sac_phase2_curriculum.yaml \
+  --seed 0
+```
+
+For safer Colab persistence, pause and sync at stage boundaries:
+
+```bash
+python -m scripts.train_curriculum \
+  --config configs/sac_phase2_curriculum.yaml \
+  --seed 0 \
+  --stop-after-stage curve
+
+python -m scripts.train_curriculum \
+  --config configs/sac_phase2_curriculum.yaml \
+  --run-dir runs/<curriculum-run> \
+  --seed 0 \
+  --stop-after-stage straight_curve
+
+python -m scripts.train_curriculum \
+  --config configs/sac_phase2_curriculum.yaml \
+  --run-dir runs/<curriculum-run> \
+  --seed 0
+```
+
+The large intermediate replay buffer is necessary for faithful curriculum continuation
+and is retained in Drive. The default Mac sync excludes the entire `models/` directory,
+so it is not downloaded for analysis.
+
+After explicit held-out evaluations, compare one or more complete seed pairs:
+
+```bash
+python -m scripts.compare_runs --phase2 --seeds 0
+python -m scripts.compare_runs --phase2 --seeds 0 1 2
+```
+
+Outputs include `phase2_seed_results.csv`, `phase2_comparison.csv/json/png`, combined
+training curves, optional light-traffic tables and plots, videos, and generated LaTeX
+macros. The comparison command fails closed if even one selected learned run has a
+different task, action interface, reward, or test split.
 
 ## Command-line workflow
 
