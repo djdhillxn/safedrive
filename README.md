@@ -218,6 +218,15 @@ The Phase-2 notebook order is:
    zero-shot light-traffic stress tests, create videos, and generate the final comparison.
 10. Compile both LaTeX reports and sync all final artifacts to Drive.
 
+The shared-helper cell makes this workflow restart-safe. After a fresh Colab kernel, run
+Sections 1--5 through the shared helpers. The helper reconstructs every available Phase-2
+run path and held-out summary from the pointers restored in Section 4.1, recomputes
+`PILOTS_PROMISING`, and lists complete direct/curriculum seed pairs. Training, evaluation,
+baseline, stress-test, and video cells reuse an existing completed artifact instead of
+rerunning it. A curriculum `paused` state advances from its next stage; `failed_gate` is a
+terminal experiment result and is never silently resumed. Comparisons automatically omit
+unpaired seeds.
+
 The direct command is:
 
 ```bash

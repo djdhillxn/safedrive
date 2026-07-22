@@ -1,4 +1,9 @@
 import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
 from scripts.sync_drive_runs import prune_local_training_artifacts, sync_runs
 
@@ -210,3 +215,77 @@ def test_local_prune_removes_training_artifacts_only(tmp_path):
     assert not (run_dir / "checkpoints").exists()
     assert (run_dir / "logs" / "train.log").exists()
     assert (run_dir / "videos" / "rollout.mp4").exists()
+
+
+def test_phase2_notebook_restores_saved_variables_and_complete_pairs(tmp_path):
+    repository = tmp_path / "repository"
+    runs = repository / "runs"
+    runs.mkdir(parents=True)
+
+    def add_learned_run(condition, seed, status, with_summary):
+        name = f"run_{condition}_{seed}"
+        run_dir = runs / name
+        (run_dir / "eval").mkdir(parents=True)
+        pointer = runs / f"latest_sac_phase2_{condition}_seed{seed}.txt"
+        pointer.write_text(f"runs/{name}\n", encoding="utf-8")
+        if condition == "curriculum":
+            state = {
+                "status": status,
+                "next_stage_index": 3 if status == "complete" else 1,
+                "completed_stages": [{"name": "curve"}],
+            }
+            (run_dir / "curriculum_state.json").write_text(
+                json.dumps(state),
+                encoding="utf-8",
+            )
+        else:
+            (run_dir / "run_metadata.json").write_text(
+                json.dumps({"status": status}),
+                encoding="utf-8",
+            )
+        if with_summary:
+            summary = {
+                "episodes": 100,
+                "success_rate": 0.9 if condition == "curriculum" else 0.2,
+                "mean_route_completion": 0.95 if condition == "curriculum" else 0.6,
+            }
+            (run_dir / "eval" / "best_test_summary.json").write_text(
+                json.dumps(summary),
+                encoding="utf-8",
+            )
+
+    for seed in [0, 1]:
+        add_learned_run("direct", seed, "complete", True)
+        add_learned_run("curriculum", seed, "complete", True)
+    add_learned_run("direct", 2, "complete", True)
+    add_learned_run("curriculum", 2, "failed_gate", False)
+
+    notebook = json.loads(Path("notebooks/phase2_colab_driver.ipynb").read_text())
+    helper_source = next(
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+        and "def restore_phase2_session_state" in "".join(cell["source"])
+    )
+    namespace = {
+        "Path": Path,
+        "json": json,
+        "os": os,
+        "shutil": shutil,
+        "subprocess": subprocess,
+        "sys": sys,
+        "REPO_DIR": repository,
+        "DRIVE_PROJECT": tmp_path / "drive" / "SafeDrive",
+        "PHASE2_TIMESTEPS": 500_000,
+        "PHASE2_TEST_EPISODES": 100,
+        "VIDEO_STEPS": 1_000,
+    }
+
+    exec(helper_source, namespace)
+
+    assert namespace["PILOTS_PROMISING"] is True
+    assert namespace["COMPLETED_PHASE2_SEEDS"] == [0, 1]
+    assert namespace["DIRECT_SEED2_SUMMARY"]["episodes"] == 100
+    assert namespace["learned_run_status"](namespace["CURRICULUM_SEED2_RUN"]) == (
+        "failed_gate"
+    )

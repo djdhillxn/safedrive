@@ -520,6 +520,21 @@ The experiment order is:
   \item compare all available strictly compatible training seeds and build the report.
 \end{enumerate}
 
+The notebook is restart-safe after Drive restoration. Its shared helper reconstructs all
+available run-directory and held-out-summary variables from latest-run pointers, derives
+the pilot decision again, and determines the complete direct--curriculum seed pairs.
+Completed training and evaluations are reused, a paused curriculum advances from its saved
+next-stage index, and a failed required gate is treated as a terminal experiment outcome.
+This prevents a fresh kernel from repeating a 500,000-step run merely because an in-memory
+Python variable was lost.
+
+The July 22 restart audit found complete held-out results for both conditions at seeds 0
+and 1. Direct SAC seed 2 also completed, but curriculum seed 2 reached the end of its
+100,000-step curve stage without passing the required gate: its best validation checkpoint
+had 0\% success and 41.75\% mean route completion. It is therefore not a resumable partial
+run and is excluded from paired comparisons. The saved result remains useful evidence of
+training-seed variability; it must not be replaced merely to obtain a favorable third pair.
+
 Traffic training, SafeMetaDrive obstacles, vehicle-dynamics randomization, image policies,
 real-world replay, and multi-agent experiments remain deferred. If Phase 2 succeeds, the
 next coherent extension is explicit obstacle/cost learning in SafeMetaDrive rather than
