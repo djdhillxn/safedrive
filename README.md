@@ -328,10 +328,12 @@ The pinned macOS offscreen path also requires leaving MetaDrive's unused mouse f
 enabled so `MainCamera` does not call a window-only method on a graphics buffer; all
 visible interface panels remain hidden.
 
-On Linux without a `DISPLAY`, including a standard Colab runtime, the recorder selects
-Panda3D's `p3headlessgl` display pipe before MetaDrive is imported. That pipe renders
-through EGL without requiring an X server. Linux hosts with a display and macOS retain
-Panda3D's platform-default pipe.
+On Linux without a `DISPLAY`, including a standard Colab runtime, the recorder
+automatically relaunches itself inside Xvfb before MetaDrive is imported. This follows
+MetaDrive's Linux rendering-test setup and uses Mesa software GL for predictable video
+generation instead of a native EGL path that can terminate the Python process without a
+traceback. Training remains GPU-enabled; only video rendering uses this compatibility
+path. Linux hosts with a display and macOS retain Panda3D's platform-default pipe.
 
 The pinned API is `main_camera.perceive(to_float=False)`. Expected frames are
 1280×720 RGB. Failure does not silently fall back to top-down; diagnostics include render

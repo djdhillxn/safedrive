@@ -3,6 +3,8 @@
 import argparse
 import importlib.metadata
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -25,6 +27,7 @@ from saferl_drive.utils import log_system_info, set_global_seeds, setup_logging,
 
 
 PINNED_METADRIVE_COMMIT = "85e5dadc6c7436d324348f6e3d8f8e680c06b4db"
+XVFB_ACTIVE = "SAFEDRIVE_XVFB_ACTIVE"
 
 
 class _DummyActionPolicy:
@@ -101,29 +104,57 @@ def select_video_scenario(episodes_csv, rule):
     return int(selected.sort_values(["env_seed", "episode"]).iloc[0]["env_seed"])
 
 
-def _headless_display_backend(view, platform_name=None, display=None):
-    """Use Panda3D's EGL pipe for chase rendering on display-less Linux hosts."""
+def _needs_virtual_display(view, platform_name=None, display=None):
+    """Return whether chase rendering needs a Linux virtual display."""
     platform_name = platform_name or sys.platform
     if display is None:
         display = os.environ.get("DISPLAY")
-    if view == "chase" and platform_name.startswith("linux") and not display:
-        return "p3headlessgl"
-    return None
+    return view == "chase" and platform_name.startswith("linux") and not display
 
 
-def _configure_chase_display(view, logger):
-    backend = _headless_display_backend(view)
-    if backend is None:
-        logger.debug("Using Panda3D's platform-default display backend.")
-        return "platform_default"
+def _xvfb_command(width, height, arguments=None, executable=None, xvfb_run=None):
+    arguments = list(sys.argv[1:] if arguments is None else arguments)
+    executable = executable or sys.executable
+    xvfb_run = xvfb_run or shutil.which("xvfb-run")
+    if xvfb_run is None:
+        raise RuntimeError(
+            "Chase rendering on display-less Linux requires xvfb-run. "
+            "Install the xvfb and xauth system packages, then retry."
+        )
+    screen_width = max(int(width), 1280)
+    screen_height = max(int(height), 1024)
+    return [
+        xvfb_run,
+        "-a",
+        "-s",
+        f"-screen 0 {screen_width}x{screen_height}x24 -nolisten tcp",
+        executable,
+        "-m",
+        "scripts.record_video",
+        *arguments,
+    ]
 
-    # This must run before MetaDrive imports ShowBase and creates its global
-    # engine. p3headlessgl uses EGL directly and does not require an X server.
-    from panda3d.core import loadPrcFileData
 
-    loadPrcFileData("safedrive-headless", f"load-display {backend}")
-    logger.info("Configured Panda3D headless display backend: %s.", backend)
-    return backend
+def _run_with_virtual_display(args, logger):
+    if not _needs_virtual_display(args.view):
+        return None
+    command = _xvfb_command(args.width, args.height)
+    environment = os.environ.copy()
+    environment[XVFB_ACTIVE] = "1"
+    environment["LIBGL_ALWAYS_SOFTWARE"] = "1"
+    logger.info("Relaunching chase recorder inside an Xvfb software-GL display.")
+    result = subprocess.run(command, env=environment)
+    if result.returncode != 0:
+        logger.error("The Xvfb chase recorder exited with code %s.", result.returncode)
+    return result.returncode
+
+
+def _display_backend(view, logger):
+    if view == "chase" and os.environ.get(XVFB_ACTIVE) == "1":
+        logger.info("Using Panda3D through Xvfb display %s.", os.environ.get("DISPLAY"))
+        return "xvfb_software_glx"
+    logger.debug("Using Panda3D's platform-default display backend.")
+    return "platform_default"
 
 
 def _camera_config(config, args, video_seed):
@@ -229,7 +260,12 @@ def main():
     environment = None
 
     try:
-        display_backend = _configure_chase_display(args.view, logger)
+        virtual_display_exit = _run_with_virtual_display(args, logger)
+        if virtual_display_exit is not None:
+            if virtual_display_exit != 0:
+                raise SystemExit(virtual_display_exit)
+            return
+        display_backend = _display_backend(args.view, logger)
         log_system_info(logger, run_dir=run_dir)
         testing = get_evaluation_config(config, "test")
         if args.episodes_csv:

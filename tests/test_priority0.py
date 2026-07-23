@@ -40,8 +40,9 @@ from scripts.compare_runs import (
 )
 from scripts.evaluate import _condition_config
 from scripts.record_video import (
-    _headless_display_backend,
+    _needs_virtual_display,
     _raw_render_environment,
+    _xvfb_command,
     select_video_scenario,
 )
 from scripts.train_curriculum import (
@@ -761,11 +762,29 @@ def test_video_scenario_selection_is_systematic(tmp_path):
     assert select_video_scenario(path, "first_failure") == 60000
 
 
-def test_chase_uses_egl_only_on_displayless_linux():
-    assert _headless_display_backend("chase", "linux", "") == "p3headlessgl"
-    assert _headless_display_backend("chase", "linux", ":0") is None
-    assert _headless_display_backend("topdown", "linux", "") is None
-    assert _headless_display_backend("chase", "darwin", "") is None
+def test_chase_uses_xvfb_only_on_displayless_linux():
+    assert _needs_virtual_display("chase", "linux", "")
+    assert not _needs_virtual_display("chase", "linux", ":0")
+    assert not _needs_virtual_display("topdown", "linux", "")
+    assert not _needs_virtual_display("chase", "darwin", "")
+    command = _xvfb_command(
+        320,
+        192,
+        arguments=["--config", "example.yaml"],
+        executable="/usr/bin/python",
+        xvfb_run="/usr/bin/xvfb-run",
+    )
+    assert command == [
+        "/usr/bin/xvfb-run",
+        "-a",
+        "-s",
+        "-screen 0 1280x1024x24 -nolisten tcp",
+        "/usr/bin/python",
+        "-m",
+        "scripts.record_video",
+        "--config",
+        "example.yaml",
+    ]
 
 
 def test_checkpoint_selection_prioritizes_success_then_route_completion():

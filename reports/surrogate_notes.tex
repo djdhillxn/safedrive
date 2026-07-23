@@ -417,12 +417,18 @@ smoke then produced real frames and confirmed a 259-element vector policy observ
 
 The Colab L4 smoke exposed a separate display-backend failure: the vector environment
 completed, but the display-less Linux chase process exited before producing a frame.
-The recorder now selects Panda3D's EGL-backed \texttt{p3headlessgl} pipe before importing
-MetaDrive whenever chase rendering runs on Linux without a \texttt{DISPLAY}. Linux
-systems with a display and macOS retain the platform default. The notebook also checks
-every shell command's exit code immediately, so a compile, test, vector-smoke, or
-chase-smoke failure stops at its real source instead of surfacing later as a missing-file
-assertion. Chase diagnostics now include the active graphics pipe and window type.
+Forcing Panda3D's EGL-backed \texttt{p3headlessgl} pipe selected the intended backend,
+but the native process still terminated without a Python traceback on the Colab L4
+runtime. MetaDrive's own Linux rendering tests use an X virtual framebuffer. The
+recorder now follows that route: on Linux without a \texttt{DISPLAY}, it automatically
+relaunches itself under \texttt{xvfb-run} and forces Mesa software GL for predictable
+video generation. Training remains GPU-enabled; only the small rendering process uses
+this compatibility path. Linux systems with a display and macOS retain the platform
+default. The notebook installs \texttt{xvfb}, \texttt{xauth}, and the Mesa GL runtime
+when missing and checks every shell command's exit code immediately, so a compile, test,
+vector-smoke, or chase-smoke failure stops at its real source instead of surfacing later
+as a missing-file assertion. Chase diagnostics include the active graphics pipe and
+window type.
 
 Scenario selection is deterministic from episode CSVs: the lowest matching seed is used
 for first, first-success, or first-failure. Every MP4 sidecar records source, seed,
