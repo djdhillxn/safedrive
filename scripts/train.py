@@ -6,7 +6,10 @@ Examples:
 """
 
 import argparse
+import csv
+import subprocess
 import sys
+import time
 from collections import deque
 
 import numpy as np
@@ -37,6 +40,7 @@ from saferl_drive.utils import (
     append_run_manifest,
     log_system_info,
     make_run_dir,
+    model_space_diagnostics,
     plot_eval_summary,
     plot_training_returns,
     set_global_seeds,
@@ -56,6 +60,10 @@ def parse_args():
     parser.add_argument("--total-timesteps", type=int, default=None)
     parser.add_argument("--n-envs", type=int, default=None)
     parser.add_argument("--vec-env", choices=["dummy", "subproc"], default=None)
+    progress = parser.add_mutually_exclusive_group()
+    progress.add_argument("--progress", dest="progress", action="store_true")
+    progress.add_argument("--no-progress", dest="progress", action="store_false")
+    parser.set_defaults(progress=None)
     parser.add_argument(
         "overrides",
         nargs="*",
@@ -188,6 +196,81 @@ class _TrainingDiagnosticsCallback(BaseCallback):
         self.history.append(row)
         write_json({"history": self.history}, self.output_path)
         return True
+
+
+class _ResourceUsageCallback(BaseCallback):
+    """Sample resource use periodically without adding notebook console noise."""
+
+    def __init__(self, output_path, interval_seconds=60):
+        super().__init__(verbose=0)
+        self.output_path = output_path
+        self.interval_seconds = max(float(interval_seconds), 1.0)
+        self.last_time = None
+        self.last_timesteps = 0
+
+    def _gpu_usage(self):
+        try:
+            result = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=utilization.gpu,memory.used",
+                    "--format=csv,noheader,nounits",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            return None, None
+        if result.returncode != 0 or not result.stdout.strip():
+            return None, None
+        values = result.stdout.strip().splitlines()[0].split(",")
+        try:
+            return float(values[0].strip()), float(values[1].strip())
+        except (IndexError, ValueError):
+            return None, None
+
+    def _write_sample(self, now):
+        import psutil
+
+        elapsed = max(now - self.last_time, 1e-9)
+        timesteps = int(self.num_timesteps)
+        gpu_utilization, gpu_memory_mb = self._gpu_usage()
+        memory = psutil.virtual_memory()
+        row = {
+            "timestamp_utc": utc_timestamp(),
+            "timesteps": timesteps,
+            "cpu_percent": psutil.cpu_percent(interval=None),
+            "ram_used_bytes": int(memory.used),
+            "ram_percent": float(memory.percent),
+            "gpu_utilization_percent": gpu_utilization,
+            "gpu_memory_used_mb": gpu_memory_mb,
+            "environment_steps_per_second": (timesteps - self.last_timesteps) / elapsed,
+        }
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        new_file = not self.output_path.exists()
+        with self.output_path.open("a", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=list(row))
+            if new_file:
+                writer.writeheader()
+            writer.writerow(row)
+        self.last_time = now
+        self.last_timesteps = timesteps
+
+    def _on_training_start(self):
+        self.last_time = time.monotonic()
+        self.last_timesteps = int(self.num_timesteps)
+
+    def _on_step(self):
+        now = time.monotonic()
+        if now - self.last_time >= self.interval_seconds:
+            self._write_sample(now)
+        return True
+
+    def _on_training_end(self):
+        now = time.monotonic()
+        if self.last_time is not None and now > self.last_time:
+            self._write_sample(now)
 
 
 class _SuccessFirstValidationCallback(BaseCallback):
@@ -375,6 +458,8 @@ def main():
         config.setdefault("train", {})["n_envs"] = args.n_envs
     if args.vec_env is not None:
         config.setdefault("train", {})["vec_env"] = args.vec_env
+    if args.progress is not None:
+        config.setdefault("train", {})["progress_bar"] = args.progress
 
     experiment = config.get("experiment", {})
     training = config.get("train", {})
@@ -486,7 +571,19 @@ def main():
         model = build_model(algorithm, env=train_env, seed=seed, tensorboard_log=tensorboard_log)
         model_device = str(model.device)
         metadata["training"]["model_device"] = model_device
+        diagnostics = model_space_diagnostics(model, train_env, config.get("metadrive", {}))
+        metadata["training"]["interface"] = diagnostics
         logger.info("%s policy device: %s", algorithm_name.upper(), model_device)
+        logger.info(
+            "Policy interface: observation %s | action %s | lidar beams %s | "
+            "policy/actor/critic parameters %s/%s/%s",
+            diagnostics["observation_shape"],
+            diagnostics["action_shape"],
+            diagnostics["lidar_beams"],
+            diagnostics["policy_parameters"],
+            diagnostics["actor_parameters"],
+            diagnostics["critic_parameters"],
+        )
         environment_count = max(int(training.get("n_envs", 1)), 1)
         if algorithm_name == "ppo":
             ppo_kwargs = algorithm.get("kwargs", {})
@@ -531,6 +628,12 @@ def main():
             _TrainingDiagnosticsCallback(
                 run_dir / "logs" / "training_diagnostics.json",
                 save_freq=max(diagnostic_frequency // environment_count, 1),
+            )
+        )
+        callbacks.append(
+            _ResourceUsageCallback(
+                run_dir / "logs" / "resource_usage.csv",
+                interval_seconds=training.get("resource_sample_seconds", 60),
             )
         )
 

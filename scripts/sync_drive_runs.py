@@ -12,6 +12,8 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from saferl_drive.config import load_yaml
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 IGNORED_NAMES = {".DS_Store"}
@@ -53,6 +55,21 @@ def parse_args():
         "--dry-run",
         action="store_true",
         help="Show what would be copied without changing files.",
+    )
+    parser.add_argument(
+        "--to-drive",
+        action="store_true",
+        help="Persist one local run to Drive instead of restoring Drive runs locally.",
+    )
+    parser.add_argument(
+        "--run-dir",
+        default=None,
+        help="Local run directory required with --to-drive.",
+    )
+    parser.add_argument(
+        "--project-artifacts-to-drive",
+        action="store_true",
+        help="Persist comparison tables, plots, videos, report sources, and PDFs.",
     )
     return parser.parse_args()
 
@@ -170,8 +187,11 @@ def copy_file(source, destination, dry_run=False, verify_contents=False):
     return True
 
 
-def iter_run_files(source, include_training_artifacts=False):
+def iter_run_files(source, include_training_artifacts=False, include_checkpoints=True):
     for directory, directory_names, file_names in os.walk(source):
+        directory_names[:] = [name for name in directory_names if name != "tensorboard"]
+        if not include_checkpoints:
+            directory_names[:] = [name for name in directory_names if name != "checkpoints"]
         if not include_training_artifacts:
             directory_names[:] = [
                 name for name in directory_names if name not in TRAINING_ARTIFACT_DIRECTORIES
@@ -186,11 +206,18 @@ def iter_run_files(source, include_training_artifacts=False):
             yield path
 
 
-def merge_directory(source, destination, dry_run=False, include_training_artifacts=False):
+def merge_directory(
+    source,
+    destination,
+    dry_run=False,
+    include_training_artifacts=False,
+    include_checkpoints=True,
+):
     paths = list(
         iter_run_files(
             source,
             include_training_artifacts=include_training_artifacts,
+            include_checkpoints=include_checkpoints,
         )
     )
 
@@ -382,6 +409,152 @@ def sync_runs(
     }
 
 
+def critical_run_files(run_dir):
+    """Return the restart-critical files expected for one persisted run."""
+    run_dir = Path(run_dir)
+    required = [
+        run_dir / "resolved_config.yaml",
+        run_dir / "run_metadata.json",
+    ]
+    if (run_dir / "curriculum_state.json").exists():
+        required.append(run_dir / "curriculum_state.json")
+    config_path = run_dir / "resolved_config.yaml"
+    try:
+        config = load_yaml(config_path)
+    except (FileNotFoundError, OSError, ValueError):
+        config = {}
+    is_traffic_adaptation = bool(config.get("source"))
+    if is_traffic_adaptation or (run_dir / "source_lineage.json").exists():
+        required.append(run_dir / "source_lineage.json")
+    if is_traffic_adaptation:
+        required.extend(
+            [
+                run_dir / "logs" / "curriculum_train.log",
+                run_dir / "logs" / "resource_usage.csv",
+            ]
+        )
+        evaluation_summaries = sorted((run_dir / "eval").glob("best_*_summary.json"))
+        evaluation_episodes = sorted((run_dir / "eval").glob("best_*_episodes.csv"))
+        required.append(
+            evaluation_summaries[0]
+            if evaluation_summaries
+            else run_dir / "eval" / "best_validation_summary.json"
+        )
+        required.append(
+            evaluation_episodes[0]
+            if evaluation_episodes
+            else run_dir / "eval" / "best_validation_episodes.csv"
+        )
+
+    metadata = read_metadata(run_dir) or {}
+    status = metadata.get("status")
+    if status in {"complete", "paused", "failed_gate"}:
+        model_candidates = [
+            run_dir / "models" / "best_model.zip",
+            run_dir / "models" / "final_model.zip",
+            run_dir / "models" / "curriculum_resume_model.zip",
+        ]
+        if not any(path.exists() for path in model_candidates):
+            required.append(model_candidates[0])
+        if (run_dir / "curriculum_state.json").exists():
+            required.extend(
+                [
+                    run_dir / "models" / "curriculum_resume_model.zip",
+                    run_dir / "models" / "curriculum_resume_replay_buffer.pkl",
+                ]
+            )
+    return required
+
+
+def verify_critical_files(run_dir):
+    """Fail closed when a copied training run cannot be resumed or evaluated."""
+    run_dir = Path(run_dir)
+    missing = [path for path in critical_run_files(run_dir) if not path.exists()]
+    if missing:
+        relative = [
+            str(path.relative_to(run_dir)) if path.is_relative_to(run_dir) else str(path)
+            for path in missing
+        ]
+        raise FileNotFoundError(
+            "Critical persisted artifacts are missing from "
+            f"{run_dir}: {', '.join(relative)}"
+        )
+    return [str(path.relative_to(run_dir)) for path in critical_run_files(run_dir)]
+
+
+def sync_run_to_drive(drive_project, run_dir, dry_run=False):
+    """Atomically merge one local run and its latest pointer into Drive."""
+    run_dir = Path(run_dir).resolve()
+    if not run_dir.is_dir():
+        raise FileNotFoundError(f"Local run directory was not found: {run_dir}")
+    verify_critical_files(run_dir)
+    drive_runs = Path(drive_project) / "runs"
+    destination = drive_runs / run_dir.name
+    if not dry_run:
+        drive_runs.mkdir(parents=True, exist_ok=True)
+    copied_files = merge_directory(
+        run_dir,
+        destination,
+        dry_run=dry_run,
+        include_training_artifacts=True,
+        include_checkpoints=False,
+    )
+    metadata = read_metadata(run_dir) or {}
+    latest_name = pointer_name(metadata)
+    pointer = None
+    if latest_name:
+        pointer = drive_runs / f"latest_{latest_name}.txt"
+        if dry_run:
+            print(f"Would write pointer: {pointer} -> runs/{run_dir.name}")
+        else:
+            temporary = pointer.with_name(f".{pointer.name}.safedrive-sync.tmp")
+            temporary.write_text(f"runs/{run_dir.name}\n", encoding="utf-8")
+            temporary.replace(pointer)
+    if not dry_run:
+        verified = verify_critical_files(destination)
+        if pointer is not None and not pointer.exists():
+            raise FileNotFoundError(f"Drive latest pointer was not persisted: {pointer}")
+    else:
+        verified = []
+    return {
+        "copied_files": copied_files,
+        "drive_run": destination,
+        "pointer": pointer,
+        "verified_critical_files": verified,
+    }
+
+
+def sync_project_artifacts_to_drive(drive_project, repository_root=None, dry_run=False):
+    """Persist compact final project outputs without copying generated build clutter."""
+    repository_root = Path(repository_root or REPOSITORY_ROOT)
+    drive_project = Path(drive_project)
+    copied = []
+    allowed_run_suffixes = {".csv", ".json", ".png", ".log", ".txt", ".mp4"}
+    local_runs = repository_root / "runs"
+    if local_runs.exists():
+        for path in local_runs.iterdir():
+            if path.is_file() and path.suffix.lower() in allowed_run_suffixes:
+                destination = drive_project / "runs" / path.name
+                if copy_file(path, destination, dry_run=dry_run, verify_contents=True):
+                    copied.append(str(destination))
+        videos = local_runs / "videos"
+        if videos.is_dir():
+            for path in iter_run_files(videos, include_training_artifacts=False):
+                destination = drive_project / "runs" / "videos" / path.relative_to(videos)
+                if copy_file(path, destination, dry_run=dry_run):
+                    copied.append(str(destination))
+
+    allowed_report_suffixes = {".tex", ".bib", ".pdf"}
+    reports = repository_root / "reports"
+    if reports.exists():
+        for path in reports.iterdir():
+            if path.is_file() and path.suffix.lower() in allowed_report_suffixes:
+                destination = drive_project / "reports" / path.name
+                if copy_file(path, destination, dry_run=dry_run, verify_contents=True):
+                    copied.append(str(destination))
+    return copied
+
+
 def main():
     args = parse_args()
     if args.include_training_artifacts and args.prune_local_training_artifacts:
@@ -390,6 +563,32 @@ def main():
             "--prune-local-training-artifacts, not both."
         )
     drive_project = discover_drive_project(args.drive_project)
+    if args.project_artifacts_to_drive:
+        copied = sync_project_artifacts_to_drive(
+            drive_project,
+            repository_root=REPOSITORY_ROOT,
+            dry_run=args.dry_run,
+        )
+        print(f"Project artifact persistence complete: {len(copied)} files updated.")
+        return
+    if args.to_drive:
+        if not args.run_dir:
+            raise ValueError("--to-drive requires --run-dir.")
+        result = sync_run_to_drive(
+            drive_project,
+            args.run_dir,
+            dry_run=args.dry_run,
+        )
+        print(
+            f"Drive persistence complete: {result['copied_files']} files updated in "
+            f"{result['drive_run']}."
+        )
+        if result["verified_critical_files"]:
+            print(
+                "Verified critical files: "
+                + ", ".join(result["verified_critical_files"])
+            )
+        return
     local_runs = Path(args.local_runs).expanduser().resolve()
     print(f"Drive source: {drive_project / 'runs'}")
     print(f"Local destination: {local_runs}")

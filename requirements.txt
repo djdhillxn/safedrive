@@ -9,3 +9,4 @@ tqdm>=4.66
 imageio>=2.31
 imageio-ffmpeg>=0.4.9
 rich>=13.0
+psutil>=5.9

@@ -1,11 +1,12 @@
 import json
-import os
-import shutil
-import subprocess
-import sys
 from pathlib import Path
 
-from scripts.sync_drive_runs import prune_local_training_artifacts, sync_runs
+from scripts.sync_drive_runs import (
+    prune_local_training_artifacts,
+    sync_run_to_drive,
+    sync_runs,
+    verify_critical_files,
+)
 
 
 def make_run(runs_dir, name, status, algorithm, latest_name=None, split=None):
@@ -179,6 +180,109 @@ def test_full_sync_includes_training_artifacts(tmp_path):
     assert (local_runs / run_dir.name / "models" / "replay_buffer.pkl").exists()
 
 
+def test_critical_file_check_requires_resumable_curriculum_artifacts(tmp_path):
+    run_dir = tmp_path / "run"
+    (run_dir / "models").mkdir(parents=True)
+    (run_dir / "resolved_config.yaml").write_text("algorithm: {name: sac}\n", encoding="utf-8")
+    (run_dir / "run_metadata.json").write_text(
+        json.dumps({"status": "paused", "algorithm": "sac"}),
+        encoding="utf-8",
+    )
+    (run_dir / "curriculum_state.json").write_text(
+        json.dumps({"status": "paused"}),
+        encoding="utf-8",
+    )
+    (run_dir / "models" / "curriculum_resume_model.zip").write_bytes(b"model")
+
+    try:
+        verify_critical_files(run_dir)
+    except FileNotFoundError as error:
+        assert "curriculum_resume_replay_buffer.pkl" in str(error)
+    else:
+        raise AssertionError("A paused curriculum without replay state was accepted.")
+
+    (run_dir / "models" / "curriculum_resume_replay_buffer.pkl").write_bytes(b"replay")
+    verified = verify_critical_files(run_dir)
+    assert "curriculum_state.json" in verified
+
+
+def test_traffic_run_requires_lineage_logs_resource_samples_and_validation(tmp_path):
+    run_dir = tmp_path / "traffic_run"
+    (run_dir / "models").mkdir(parents=True)
+    (run_dir / "logs").mkdir()
+    (run_dir / "eval").mkdir()
+    (run_dir / "resolved_config.yaml").write_text(
+        "source:\n  latest_name: sac_phase2_curriculum_seed{seed}\n",
+        encoding="utf-8",
+    )
+    (run_dir / "run_metadata.json").write_text(
+        json.dumps({"status": "paused", "algorithm": "sac"}),
+        encoding="utf-8",
+    )
+    (run_dir / "curriculum_state.json").write_text(
+        json.dumps({"status": "paused"}),
+        encoding="utf-8",
+    )
+    (run_dir / "models" / "curriculum_resume_model.zip").write_bytes(b"model")
+    (run_dir / "models" / "curriculum_resume_replay_buffer.pkl").write_bytes(b"replay")
+
+    try:
+        verify_critical_files(run_dir)
+    except FileNotFoundError as error:
+        message = str(error)
+        assert "source_lineage.json" in message
+        assert "resource_usage.csv" in message
+        assert "best_validation_summary.json" in message
+    else:
+        raise AssertionError("An incomplete traffic-adaptation artifact set was accepted.")
+
+    (run_dir / "source_lineage.json").write_text("{}", encoding="utf-8")
+    (run_dir / "logs" / "curriculum_train.log").write_text("log", encoding="utf-8")
+    (run_dir / "logs" / "resource_usage.csv").write_text("timesteps\n1\n", encoding="utf-8")
+    (run_dir / "eval" / "best_traffic_002_validation_summary.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+    (run_dir / "eval" / "best_traffic_002_validation_episodes.csv").write_text(
+        "episode\n0\n",
+        encoding="utf-8",
+    )
+
+    verified = verify_critical_files(run_dir)
+    assert "source_lineage.json" in verified
+    assert "logs/resource_usage.csv" in verified
+
+
+def test_drive_push_copies_and_verifies_one_complete_run(tmp_path):
+    drive_project = tmp_path / "drive" / "SafeDrive"
+    run_dir = tmp_path / "repository" / "runs" / "traffic_run"
+    (run_dir / "models").mkdir(parents=True)
+    (run_dir / "resolved_config.yaml").write_text("algorithm: {name: sac}\n", encoding="utf-8")
+    (run_dir / "run_metadata.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "algorithm": "sac",
+                "latest_name": "sac_traffic_reference_seed0",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "models" / "final_model.zip").write_bytes(b"model")
+    (run_dir / "checkpoints").mkdir()
+    (run_dir / "checkpoints" / "intermediate.zip").write_bytes(b"checkpoint")
+
+    result = sync_run_to_drive(drive_project, run_dir)
+
+    drive_run = drive_project / "runs" / "traffic_run"
+    assert (drive_run / "models" / "final_model.zip").exists()
+    assert not (drive_run / "checkpoints").exists()
+    assert result["verified_critical_files"]
+    assert (
+        drive_project / "runs" / "latest_sac_traffic_reference_seed0.txt"
+    ).read_text(encoding="utf-8") == "runs/traffic_run\n"
+
+
 def test_sync_detects_a_video_added_after_run_metadata_stops_changing(tmp_path):
     drive_project = tmp_path / "SafeDrive"
     drive_runs = drive_project / "runs"
@@ -217,75 +321,34 @@ def test_local_prune_removes_training_artifacts_only(tmp_path):
     assert (run_dir / "videos" / "rollout.mp4").exists()
 
 
-def test_phase2_notebook_restores_saved_variables_and_complete_pairs(tmp_path):
-    repository = tmp_path / "repository"
-    runs = repository / "runs"
-    runs.mkdir(parents=True)
-
-    def add_learned_run(condition, seed, status, with_summary):
-        name = f"run_{condition}_{seed}"
-        run_dir = runs / name
-        (run_dir / "eval").mkdir(parents=True)
-        pointer = runs / f"latest_sac_phase2_{condition}_seed{seed}.txt"
-        pointer.write_text(f"runs/{name}\n", encoding="utf-8")
-        if condition == "curriculum":
-            state = {
-                "status": status,
-                "next_stage_index": 3 if status == "complete" else 1,
-                "completed_stages": [{"name": "curve"}],
-            }
-            (run_dir / "curriculum_state.json").write_text(
-                json.dumps(state),
-                encoding="utf-8",
-            )
-        else:
-            (run_dir / "run_metadata.json").write_text(
-                json.dumps({"status": status}),
-                encoding="utf-8",
-            )
-        if with_summary:
-            summary = {
-                "episodes": 100,
-                "success_rate": 0.9 if condition == "curriculum" else 0.2,
-                "mean_route_completion": 0.95 if condition == "curriculum" else 0.6,
-            }
-            (run_dir / "eval" / "best_test_summary.json").write_text(
-                json.dumps(summary),
-                encoding="utf-8",
-            )
-
-    for seed in [0, 1]:
-        add_learned_run("direct", seed, "complete", True)
-        add_learned_run("curriculum", seed, "complete", True)
-    add_learned_run("direct", 2, "complete", True)
-    add_learned_run("curriculum", 2, "failed_gate", False)
-
+def test_canonical_notebook_is_valid_concise_and_has_all_twenty_sections():
     notebook = json.loads(Path("notebooks/phase2_colab_driver.ipynb").read_text())
-    helper_source = next(
-        "".join(cell["source"])
+    text = "\n".join("".join(cell.get("source", [])) for cell in notebook["cells"])
+    headings = [
+        "".join(cell["source"]).splitlines()[0]
         for cell in notebook["cells"]
-        if cell["cell_type"] == "code"
-        and "def restore_phase2_session_state" in "".join(cell["source"])
-    )
-    namespace = {
-        "Path": Path,
-        "json": json,
-        "os": os,
-        "shutil": shutil,
-        "subprocess": subprocess,
-        "sys": sys,
-        "REPO_DIR": repository,
-        "DRIVE_PROJECT": tmp_path / "drive" / "SafeDrive",
-        "PHASE2_TIMESTEPS": 500_000,
-        "PHASE2_TEST_EPISODES": 100,
-        "VIDEO_STEPS": 1_000,
-    }
+        if cell["cell_type"] == "markdown"
+    ]
 
-    exec(helper_source, namespace)
-
-    assert namespace["PILOTS_PROMISING"] is True
-    assert namespace["COMPLETED_PHASE2_SEEDS"] == [0, 1]
-    assert namespace["DIRECT_SEED2_SUMMARY"]["episodes"] == 100
-    assert namespace["learned_run_status"](namespace["CURRICULUM_SEED2_RUN"]) == (
-        "failed_gate"
+    assert notebook["nbformat"] == 4
+    assert all(cell.get("source") for cell in notebook["cells"])
+    assert len(headings) == 20
+    assert [int(heading.split(".")[0].lstrip("# ")) for heading in headings] == list(
+        range(20)
     )
+    assert "print(\"hello\")" not in text
+    assert "subprocess.run" not in text
+    assert "pilot_status not in {\"complete\", \"failed_gate\"}" in text
+    assert "confirmation_status not in {\"complete\", \"failed_gate\"}" in text
+    assert "excluded from completed-lineage aggregates" in text
+    assert "no success video will be fabricated" in text
+    for command in [
+        "!python -m scripts.train_curriculum",
+        "!python -m scripts.evaluate ",
+        "!python -m scripts.record_video",
+        "!python -m scripts.compare_runs",
+        "!python -m scripts.sync_drive_runs",
+    ]:
+        assert command in text
+    assert not Path("notebooks/colab_smoke_test.ipynb").exists()
+    assert not Path("notebooks/phase1_colab_driver.ipynb").exists()

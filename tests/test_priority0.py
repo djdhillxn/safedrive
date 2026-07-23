@@ -16,6 +16,7 @@ from saferl_drive.config import (
     load_yaml,
     make_eval_metadrive_config,
     make_experiment_fingerprint,
+    resolve_reward_variant,
 )
 from saferl_drive.evaluation import (
     _episode_row,
@@ -31,9 +32,17 @@ from saferl_drive.envs import (
     _valid_scenario_seed,
     _worker_scenario_seed,
 )
-from scripts.compare_runs import _compatibility
-from scripts.record_video import _raw_render_environment
+from scripts.compare_runs import (
+    _compatibility,
+    _traffic_aggregates,
+    _traffic_effects,
+    select_traffic_pilot,
+)
+from scripts.evaluate import _condition_config
+from scripts.record_video import _raw_render_environment, select_video_scenario
 from scripts.train_curriculum import (
+    _promote_failed_gate_model,
+    _spaces_match,
     curriculum_stage_budget,
     stage_config,
     validate_curriculum_config,
@@ -384,6 +393,88 @@ def test_phase_two_configs_share_the_exact_final_task_and_action_interface():
         validate_algorithm_config(config["algorithm"])
 
 
+def test_traffic_config_is_single_agent_and_matches_the_fixed_plan():
+    config = load_yaml("configs/sac_traffic_curriculum.yaml")
+    stages = validate_curriculum_config(config)
+
+    assert config["metadrive"]["num_agents"] == 1
+    assert config["metadrive"]["is_multi_agent"] is False
+    assert config["metadrive"]["image_observation"] is False
+    assert config["metadrive"]["map"] == 3
+    assert config["metadrive"]["num_scenarios"] == 200
+    assert config["metadrive"]["start_seed"] == 40000
+    assert config["metadrive"]["traffic_mode"] == "respawn"
+    assert config["metadrive"]["random_traffic"] is True
+    assert config["source"]["model"] == "best"
+    assert config["source"]["fresh_replay_buffer"] is True
+    assert config["curriculum"]["total_timesteps"] == 300000
+    assert [stage["max_timesteps"] for stage in stages] == [100000, 200000]
+    assert [stage["metadrive"]["traffic_density"] for stage in stages] == [0.02, 0.05]
+    assert curriculum_stage_budget(config, stages[0], 0) == 100000
+    assert curriculum_stage_budget(config, stages[1], 100000) == 200000
+    assert config["validation"]["start_seed"] == 50000
+    assert config["validation"]["episodes"] == 25
+    assert config["test"]["start_seed"] == 60000
+    assert config["test"]["episodes"] == 100
+    assert config["test"]["densities"] == [0.0, 0.05, 0.10]
+
+
+def test_traffic_reward_variants_change_only_the_controlled_penalties():
+    config = load_yaml("configs/sac_traffic_curriculum.yaml")
+    reference = resolve_reward_variant(config, "reference")
+    safety = resolve_reward_variant(config, "safety")
+    changed = {
+        key
+        for key in reference["metadrive"]
+        if reference["metadrive"].get(key) != safety["metadrive"].get(key)
+    }
+
+    assert changed == {"crash_vehicle_penalty", "crash_object_penalty"}
+    assert reference["metadrive"]["crash_vehicle_penalty"] == 5.0
+    assert safety["metadrive"]["crash_vehicle_penalty"] == 10.0
+
+
+def test_traffic_config_rejects_multi_agent_or_image_training():
+    config = load_yaml("configs/sac_traffic_curriculum.yaml")
+    for key, value, message in [
+        ("num_agents", 2, "num_agents=1"),
+        ("is_multi_agent", True, "is_multi_agent=false"),
+        ("image_observation", True, "vector LidarState"),
+    ]:
+        changed = load_yaml("configs/sac_traffic_curriculum.yaml")
+        changed["metadrive"][key] = value
+        try:
+            validate_curriculum_config(changed)
+        except ValueError as error:
+            assert message in str(error)
+        else:
+            raise AssertionError(f"Invalid traffic setting {key} was accepted.")
+
+
+def test_density_matrix_changes_only_the_requested_evaluation_condition():
+    config = load_yaml("configs/sac_traffic_curriculum.yaml")
+    changed = _condition_config(config, "test", 0.10)
+
+    assert changed["test"]["traffic_density"] == 0.10
+    assert changed["test"]["traffic_mode"] == "respawn"
+    assert changed["test"]["random_traffic"] is False
+    assert config["test"]["traffic_density"] == 0.05
+    assert make_experiment_fingerprint(changed)["task_id"] != make_experiment_fingerprint(
+        config
+    )["task_id"]
+
+
+def test_warm_start_space_validation_requires_exact_shapes_and_bounds():
+    source = gym.spaces.Box(-1.0, 1.0, shape=(2,), dtype=np.float32)
+    same = gym.spaces.Box(-1.0, 1.0, shape=(2,), dtype=np.float32)
+    changed_shape = gym.spaces.Box(-1.0, 1.0, shape=(3,), dtype=np.float32)
+    changed_bounds = gym.spaces.Box(-0.5, 1.0, shape=(2,), dtype=np.float32)
+
+    assert _spaces_match(source, same)
+    assert not _spaces_match(source, changed_shape)
+    assert not _spaces_match(source, changed_bounds)
+
+
 def test_sac_config_rejects_the_incompatible_replay_buffer_options():
     config = {
         "name": "sac",
@@ -520,6 +611,150 @@ def test_episode_metrics_capture_full_action_behavior():
     assert row["throttle_rate"] == 1.0 / 3.0
     assert row["brake_rate"] == 1.0 / 3.0
     assert row["mean_action_change"] == 1.25
+
+
+def test_episode_outcome_is_mutually_exclusive_but_raw_flags_are_retained():
+    row = _episode_row(
+        episode=0,
+        requested_seed=60000,
+        return_sum=0.0,
+        base_return_sum=0.0,
+        shaping_penalty_sum=0.0,
+        length=1,
+        cost_sum=1.0,
+        speeds=[],
+        actions=[],
+        route_completion=0.4,
+        final_info={
+            "crash": True,
+            "crash_vehicle": True,
+            "out_of_road": True,
+            "max_step": True,
+        },
+    )
+
+    assert row["terminal_outcome"] == "collision"
+    assert row["crash"] is True
+    assert row["crash_vehicle"] is True
+    assert row["out_of_road"] is True
+    assert row["max_step"] is True
+    assert row["collision_free"] is False
+
+
+def test_predeclared_traffic_selection_prefers_the_only_qualifying_pilot():
+    source_success = 0.90
+    reference = {
+        "0.00": {"success_rate": 0.85},
+        "0.05": {
+            "success_rate": 0.82,
+            "collision_rate": 0.08,
+            "out_of_road_rate": 0.08,
+            "mean_route_completion": 0.92,
+        },
+        "0.10": {"success_rate": 0.60},
+    }
+    safety = {
+        "0.00": {"success_rate": 0.88},
+        "0.05": {
+            "success_rate": 0.78,
+            "collision_rate": 0.06,
+            "out_of_road_rate": 0.08,
+            "mean_route_completion": 0.91,
+        },
+        "0.10": {"success_rate": 0.62},
+    }
+
+    decision = select_traffic_pilot(reference, safety, source_success)
+
+    assert decision["selected_variant"] == "reference"
+    assert decision["qualification"] == {"reference": True, "safety": False}
+
+
+def test_predeclared_traffic_selection_uses_collision_for_near_tied_failures():
+    reference = {
+        "0.00": {"success_rate": 0.90},
+        "0.05": {
+            "success_rate": 0.70,
+            "collision_rate": 0.20,
+            "out_of_road_rate": 0.10,
+            "mean_route_completion": 0.85,
+        },
+        "0.10": {"success_rate": 0.50},
+    }
+    safety = {
+        "0.00": {"success_rate": 0.90},
+        "0.05": {
+            "success_rate": 0.67,
+            "collision_rate": 0.12,
+            "out_of_road_rate": 0.10,
+            "mean_route_completion": 0.84,
+        },
+        "0.10": {"success_rate": 0.50},
+    }
+
+    decision = select_traffic_pilot(reference, safety, 0.90)
+
+    assert decision["selected_variant"] == "safety"
+
+
+def test_failed_confirmation_is_not_mixed_into_completed_adaptation_aggregates():
+    rows = []
+    for seed, condition, success in [
+        (0, "Frozen curriculum SAC", 0.60),
+        (0, "Adapted SAC", 0.85),
+        (1, "Frozen curriculum SAC", 0.55),
+        (1, "Adapted SAC (failed gate)", 0.40),
+    ]:
+        for density in [0.0, 0.05, 0.10]:
+            rows.append(
+                {
+                    "condition": condition,
+                    "training_seed": seed,
+                    "traffic_density": density,
+                    "success_rate": success,
+                    "collision_rate": 0.10,
+                    "mean_route_completion": 0.80,
+                }
+            )
+
+    aggregates = _traffic_aggregates(rows)
+    adapted = [
+        row
+        for row in aggregates
+        if row["condition"] == "Adapted SAC" and row["traffic_density"] == 0.05
+    ]
+    effects = _traffic_effects(rows)
+
+    assert adapted[0]["training_seeds"] == 1
+    assert [row["training_seed"] for row in effects] == [0]
+    assert any(row["condition"] == "Adapted SAC (failed gate)" for row in aggregates)
+
+
+def test_failed_gate_best_checkpoint_is_promoted_for_diagnosis(tmp_path):
+    models = tmp_path / "models"
+    models.mkdir()
+    stage_best = models / "traffic_002_best_model.zip"
+    stage_best.write_bytes(b"checkpoint")
+
+    canonical = _promote_failed_gate_model(None, tmp_path, "traffic_002")
+
+    assert canonical == models / "best_model.zip"
+    assert canonical.read_bytes() == b"checkpoint"
+
+
+def test_video_scenario_selection_is_systematic(tmp_path):
+    path = tmp_path / "episodes.csv"
+    pd.DataFrame(
+        {
+            "episode": [2, 0, 1],
+            "env_seed": [60002, 60000, 60001],
+            "success": [True, False, True],
+        }
+    ).to_csv(path, index=False)
+
+    assert select_video_scenario(path, "first") == 60000
+    assert select_video_scenario(path, "first_success") == 60001
+    assert select_video_scenario(path, "first_failure") == 60000
 
 
 def test_checkpoint_selection_prioritizes_success_then_route_completion():

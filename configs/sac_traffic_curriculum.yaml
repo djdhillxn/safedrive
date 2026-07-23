@@ -1,0 +1,175 @@
+# Final single-agent traffic-adaptation experiment.
+# The learned SAC policy controls only the ego vehicle. MetaDrive controls traffic.
+experiment:
+  name: sac_traffic
+  phase: traffic_extension
+  latest_name: sac_traffic_{variant}_seed{seed}
+  baseline_latest_prefix: traffic_extension
+  output_dir: runs
+  seed: 0
+  tensorboard: true
+
+source:
+  latest_name: sac_phase2_curriculum_seed{seed}
+  model: best
+  fresh_replay_buffer: true
+
+train:
+  total_timesteps: 300000
+  n_envs: 1
+  vec_env: subproc
+  progress_bar: true
+  normalize_obs: false
+  normalize_reward: false
+  checkpoint_freq: 50000
+  diagnostic_freq: 10000
+  eval_freq: 25000
+  save_replay_buffer: true
+  resource_sample_seconds: 60
+
+algorithm:
+  name: sac
+  policy: MlpPolicy
+  kwargs:
+    device: auto
+    learning_rate: 0.0001
+    buffer_size: 300000
+    learning_starts: 5000
+    batch_size: 512
+    tau: 0.005
+    gamma: 0.99
+    train_freq: 1
+    gradient_steps: 1
+    ent_coef: 0.05
+    target_update_interval: 1
+    optimize_memory_usage: false
+    replay_buffer_kwargs:
+      handle_timeout_termination: true
+    verbose: 0
+    policy_kwargs:
+      net_arch: [256, 256]
+
+metadrive:
+  use_render: false
+  image_observation: false
+  log_level: 50
+  map: 3
+  num_scenarios: 200
+  start_seed: 40000
+  sequential_seed: true
+  traffic_density: 0.02
+  traffic_mode: respawn
+  random_traffic: true
+  random_spawn_lane_index: false
+  horizon: 1000
+  truncate_as_terminate: false
+  discrete_action: false
+  num_agents: 1
+  is_multi_agent: false
+  success_reward: 10.0
+  out_of_road_penalty: 5.0
+  crash_vehicle_penalty: 5.0
+  crash_object_penalty: 5.0
+  crash_sidewalk_penalty: 5.0
+  driving_reward: 1.0
+  speed_reward: 0.1
+  use_lateral_reward: false
+  crash_vehicle_done: true
+  crash_object_done: true
+  out_of_road_done: true
+  accident_prob: 0.0
+  reward_shaping: {}
+
+reward_variants:
+  reference:
+    crash_vehicle_penalty: 5.0
+    crash_object_penalty: 5.0
+  safety:
+    crash_vehicle_penalty: 10.0
+    crash_object_penalty: 10.0
+
+validation:
+  start_seed: 50000
+  num_scenarios: 25
+  map: 3
+  traffic_density: 0.05
+  traffic_mode: respawn
+  random_traffic: false
+  random_spawn_lane_index: false
+  horizon: 1000
+  num_agents: 1
+  is_multi_agent: false
+  episodes: 25
+  deterministic: true
+  progress: false
+  vec_env: subproc
+
+test:
+  start_seed: 60000
+  num_scenarios: 100
+  map: 3
+  traffic_density: 0.05
+  traffic_mode: respawn
+  random_traffic: false
+  random_spawn_lane_index: false
+  horizon: 1000
+  num_agents: 1
+  is_multi_agent: false
+  episodes: 100
+  deterministic: true
+  progress: true
+  vec_env: subproc
+  densities: [0.0, 0.05, 0.10]
+
+pilot_selection:
+  densities: [0.0, 0.05, 0.10]
+  episodes: 50
+  start_seed: 50000
+  primary_density: 0.05
+  minimum_success_rate: 0.80
+  maximum_collision_rate: 0.10
+  maximum_out_of_road_rate: 0.10
+  minimum_route_completion: 0.90
+  maximum_traffic_free_success_drop: 0.10
+  collision_tie: 0.02
+  success_tie: 0.05
+
+curriculum:
+  total_timesteps: 300000
+  stages:
+    - name: traffic_002
+      max_timesteps: 100000
+      require_gate: true
+      metadrive:
+        traffic_density: 0.02
+        traffic_mode: respawn
+        random_traffic: true
+      validation:
+        traffic_density: 0.02
+        traffic_mode: respawn
+        random_traffic: false
+      gate:
+        success_rate: 0.70
+        route_completion: 0.80
+        max_collision_rate: 0.25
+        max_out_of_road_rate: 0.15
+    - name: traffic_005
+      max_timesteps: 200000
+      require_gate: false
+      metadrive:
+        traffic_density: 0.05
+        traffic_mode: respawn
+        random_traffic: true
+      validation:
+        traffic_density: 0.05
+        traffic_mode: respawn
+        random_traffic: false
+      gate:
+        success_rate: 0.80
+        route_completion: 0.90
+        max_collision_rate: 0.10
+        max_out_of_road_rate: 0.10
+
+logging:
+  console_level: INFO
+  file_level: DEBUG

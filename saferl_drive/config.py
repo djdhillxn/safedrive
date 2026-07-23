@@ -3,12 +3,13 @@
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import yaml
 
 
-FINGERPRINT_SCHEMA_VERSION = 2
+FINGERPRINT_SCHEMA_VERSION = 3
 
 FINGERPRINT_ENVIRONMENT_KEYS = [
     "map",
@@ -27,6 +28,9 @@ FINGERPRINT_ENVIRONMENT_KEYS = [
     "crash_object_done",
     "out_of_road_done",
     "accident_prob",
+    "num_agents",
+    "is_multi_agent",
+    "image_observation",
 ]
 
 FINGERPRINT_ACTION_KEYS = [
@@ -62,8 +66,12 @@ def load_yaml(path):
 def save_yaml(data, path):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with temporary.open("w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, sort_keys=False)
+        f.flush()
+        os.fsync(f.fileno())
+    temporary.replace(path)
 
 
 def deep_update(base, updates):
@@ -141,17 +149,45 @@ def make_eval_metadrive_config(cfg, split="test"):
         "random_spawn_lane_index",
         "horizon",
         "map",
+        "traffic_mode",
+        "num_agents",
+        "is_multi_agent",
+        "accident_prob",
+        "truncate_as_terminate",
+        "crash_vehicle_done",
+        "crash_object_done",
+        "out_of_road_done",
     ]
     for key in override_keys:
         if key in eval_cfg:
             env_cfg[key] = eval_cfg[key]
     env_cfg["use_render"] = False
     env_cfg.setdefault("log_level", 50)
+    env_cfg.setdefault("num_agents", 1)
+    env_cfg.setdefault("is_multi_agent", False)
+    env_cfg.setdefault("image_observation", False)
     if "random_traffic" not in eval_cfg:
         env_cfg["random_traffic"] = False
     if "random_spawn_lane_index" not in eval_cfg:
         env_cfg["random_spawn_lane_index"] = False
     return env_cfg
+
+
+def resolve_reward_variant(cfg, variant):
+    """Apply one declared reward variant without duplicating the full config."""
+    result = copy.deepcopy(cfg)
+    variants = result.get("reward_variants", {})
+    if not variants:
+        if variant is not None:
+            raise ValueError("This configuration does not declare reward_variants.")
+        return result
+    selected = variant or "reference"
+    if selected not in variants:
+        choices = ", ".join(sorted(variants))
+        raise ValueError(f"Unknown reward variant {selected!r}; choose one of: {choices}.")
+    result["selected_variant"] = selected
+    result["metadrive"] = deep_update(result.get("metadrive", {}), variants[selected])
+    return result
 
 
 def _fingerprint_values(source, keys):

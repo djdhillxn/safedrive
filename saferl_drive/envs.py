@@ -169,6 +169,17 @@ def make_metadrive_env(env_config, seed=None, monitor_file=None, scenario_seed=N
     steering_limit = cfg.pop("steering_limit", None)
     sequential_seed = bool(cfg.pop("sequential_seed", False))
     policy_name = cfg.pop("_safedrive_agent_policy", None)
+    main_camera_capture = bool(cfg.pop("_safedrive_main_camera", False))
+    if main_camera_capture:
+        from metadrive.engine.core.main_camera import MainCamera
+        from metadrive.obs.state_obs import LidarStateObservation
+
+        cfg.setdefault("sensors", {})["main_camera"] = (MainCamera,)
+        # MetaDrive 0.4.3 only retains offscreen cameras when this rendering
+        # service switch is enabled. agent_observation keeps the policy-facing
+        # observation as LidarState instead of changing it to RGB.
+        cfg["image_observation"] = True
+        cfg["agent_observation"] = LidarStateObservation
     if policy_name == "IDMPolicy":
         # Import the native MetaDrive policy only in the process that owns the
         # engine. This keeps the parent evaluator free of Panda3D state.

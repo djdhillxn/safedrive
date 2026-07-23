@@ -12,5 +12,4 @@ reports/*.fdb_latexmk
 reports/*.fls
 reports/*.log
 reports/*.out
-reports/*.pdf
-reports/generated_*_results.tex
+reports/*.synctex.gz

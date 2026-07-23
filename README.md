@@ -1,520 +1,426 @@
-# SafeRL-Drive: Reproducible Control and Procedural Generalization in MetaDrive
+# SafeRL-Drive
 
-SafeRL-Drive is a focused student reinforcement-learning project for closed-loop driving
-in MetaDrive. Phase 1 asks a deliberately bounded question: can PPO and SAC reliably learn
-lane following and route completion on one traffic-free straight
-road, under the same observations, reward, and evaluation metrics? The learned
-agents are compared with MetaDrive's rule-based IDM controller.
+SafeRL-Drive is a bounded reinforcement-learning study in MetaDrive. Its final question is:
 
-Phase 2 advances the credible continuous-control learner, SAC, into an equal-budget
-direct-versus-curriculum experiment on unseen three-block procedural roads. The project
-uses vector observations and records success, collision, off-road, timeout,
-route-completion, return, cost, speed, and episode-length metrics. Every experiment keeps
-its resolved config, detailed logs, metadata, and artifacts in one run directory.
+> Can a geometry-competent SAC policy adapt to interactive procedural traffic while
+> reducing collisions and retaining traffic-free road generalization?
 
-## Project structure
+The learned policy controls one ego vehicle. MetaDrive’s native traffic manager controls
+all surrounding vehicles. Every final condition uses `num_agents: 1` and
+`is_multi_agent: false`; surrounding vehicles are never trained.
+
+This is not a complete autonomous-driving stack and does not claim real-world safety.
+
+## Project story
+
+Phase 1 established trustworthy infrastructure on an intentionally easy straight,
+traffic-free task. IDM, PPO, and SAC each reached 100% success on 20 held-out episodes.
+The result validated training, checkpoint selection, evaluation, metrics, rendering, and
+Drive persistence; it was not a robustness benchmark.
+
+Phase 2 tested procedural road geometry. With the same SAC architecture, action space,
+reward, budget, and held-out task:
+
+| Condition | Success | Collision | Off-road | Route completion |
+|---|---:|---:|---:|---:|
+| Direct SAC | 12.0% | 15.5% | 83.0% | 47.0% |
+| Curriculum SAC | 87.0% | 0.0% | 9.5% | 95.1% |
+
+These are means across completed seeds 0 and 1. Curriculum seed 2 failed its mandatory
+curve gate and remains preserved as negative evidence.
+
+At traffic density 0.05, without traffic training, frozen curriculum SAC achieved 69%
+success and 21% collision. That is promising initialization, not trained traffic
+competence. The final extension therefore warm-starts from the successful geometry
+curriculum and changes one difficulty dimension: traffic exposure.
+
+No new PPO traffic model, algorithm sweep, network-size experiment, or reward search is
+part of the final plan.
+
+## Final three-run plan
+
+Only these long runs are planned:
+
+1. `SAC-Traffic`, seed 0: collision penalties remain 5.
+2. `SAC-Traffic-Safe`, seed 0: vehicle/object collision penalties become 10.
+3. Seed-1 confirmation of the predeclared seed-0 winner.
+
+Both pilots warm-start from the best completed Phase-2 curriculum seed-0 checkpoint.
+The confirmation warm-starts from curriculum seed 1. Each adaptation uses:
+
+- stage A: density 0.02, at most 100,000 new transitions;
+- stage B: density 0.05, at most 200,000 new transitions;
+- map 3, 200 training scenarios beginning at seed 40000;
+- respawn traffic, randomized during training;
+- fixed 25-episode validation beginning at seed 50000;
+- full continuous control and default LidarState vector observation;
+- `MlpPolicy` with `[256, 256]`;
+- learning rate `1e-4`, batch 512, buffer 300,000, starts 5,000;
+- `gamma=0.99`, `tau=0.005`, `ent_coef=0.05`;
+- correct timeout handling and standard replay memory layout.
+
+Stage A must achieve at least 70% success and 80% route completion, with at most 25%
+collision and 15% off-road. A failed gate pauses the lineage and does not create another
+pilot. Its success-first Stage-A checkpoint remains available for diagnosis, but the
+lineage is labeled `failed_gate` and excluded from completed-lineage aggregates.
+
+The seed-0 pilots are evaluated on 50 fixed scenarios at densities 0, 0.05, and 0.10.
+The saved selection rule uses success, collision, off-road, route completion, and
+traffic-free retention. Only the selected variant advances to seed 1. Seed 2 is not run.
+
+## Warm start and replay behavior
+
+`scripts.train_curriculum` resolves the source run from
+`latest_sac_phase2_curriculum_seed{seed}.txt` unless `--source-run-dir` is given.
+Normally it selects `best_model.zip`.
+
+Before training, it:
+
+1. hashes the source checkpoint;
+2. records the source run fingerprint and summary;
+3. constructs a new SAC model using the traffic configuration;
+4. verifies exact observation and action spaces;
+5. copies actor, critic, and target-network policy state;
+6. leaves the new optimizer and traffic replay buffer fresh.
+
+The historical traffic-free replay buffer is not imported, so it cannot dominate early
+adaptation. Loading it requires the explicit `--load-source-replay-buffer` flag and is not
+used by the canonical notebook.
+
+After adaptation starts, the traffic model and its own replay buffer are saved at every
+stage boundary. A resumed run restores that traffic state and requires the exact immutable
+`resolved_config.yaml`.
+
+## Repository structure
 
 ```text
-safedrive/
-├── configs/
-│   ├── ppo_mvp.yaml
-│   ├── sac_mvp.yaml
-│   ├── sac_phase2_direct.yaml
-│   ├── sac_phase2_curriculum.yaml
-│   └── smoke_test.yaml
-├── notebooks/
-│   ├── colab_smoke_test.ipynb
-│   ├── phase1_colab_driver.ipynb
-│   └── phase2_colab_driver.ipynb
-├── reports/
-│   ├── main.tex
-│   ├── surrogate_notes.tex
-│   └── references.bib
-├── saferl_drive/
-│   ├── algorithms.py
-│   ├── config.py
-│   ├── envs.py
-│   ├── evaluation.py
-│   └── utils.py
-├── scripts/
-│   ├── train.py
-│   ├── train_curriculum.py
-│   ├── evaluate.py
-│   ├── evaluate_baseline.py
-│   ├── sync_drive_runs.py
-│   ├── record_video.py
-│   ├── plot_results.py
-│   └── compare_runs.py
-├── pyproject.toml
-└── requirements.txt
+configs/
+  sac_traffic_curriculum.yaml       final shared config and reward variants
+  sac_phase2_*.yaml                 historical geometry experiments
+  ppo_mvp.yaml, sac_mvp.yaml        historical Phase-1 controls
+notebooks/
+  phase2_colab_driver.ipynb         single complete Colab driver
+saferl_drive/
+  algorithms.py                     SB3 model construction and validation
+  config.py                         YAML, overrides, and fingerprints
+  envs.py                           MetaDrive and vector-environment factories
+  evaluation.py                     episode metrics and aggregation
+  utils.py                          logging, artifacts, plots, and atomic writes
+scripts/
+  train.py                          Phase-1/direct training
+  train_curriculum.py               geometry and traffic curricula
+  evaluate.py                       learned-policy density matrices
+  evaluate_baseline.py              IDM/Expert density matrices
+  compare_runs.py                   Phase 1, Phase 2, and traffic comparisons
+  record_video.py                   chase or diagnostic top-down video
+  sync_drive_runs.py                Mac restore and Colab-to-Drive persistence
+reports/
+  main.tex, main.pdf                compact public report
+  surrogate_notes.tex, .pdf         detailed internal record
+tests/
 ```
 
 ## Installation
 
-Python 3.10 or 3.11 is the safest local choice for simulation packages. Current Colab
-runtimes use Python 3.12, so MetaDrive is pinned to an upstream revision that supports it.
+Use Python 3.10 or newer. MetaDrive is pinned to commit
+`85e5dadc6c7436d324348f6e3d8f8e680c06b4db`.
 
 ```bash
-conda create -n saferl-drive python=3.10 -y
-conda activate saferl-drive
-cd safedrive
-pip install -e .
+python -m pip install -e .
+python -m compileall saferl_drive scripts tests
+pytest -q
 ```
 
-SafeRL-Drive uses Gymnasium. The Colab notebooks remove the obsolete `gym` distribution
-before installation so Stable-Baselines3 does not print Gym's maintenance warning.
+The project uses Gymnasium. A Colab image that also contains obsolete `gym` can remove it:
 
-## Scope and end objective
-
-The core claim is intentionally modest: **standard PPO and SAC can learn reproducible
-lane-following controls in this pipeline**. Phase 1 is complete only when
-each learned agent's frozen best checkpoint reaches at least 80% success and 90% mean
-route completion, with at most 10% collision, off-road, and timeout outcomes on 20
-untouched test episodes. It does not claim robust autonomous driving, procedural-map generalization, or
-algorithmic superiority from a single seed. PPO uses MetaDrive's documented beginner
-3-by-3 steering/throttle action grid. SAC remains continuous, with steering limited to
-`[-0.1, 0.1]` for basic lane centering and full throttle/brake. Because these action
-interfaces differ, Phase 1 demonstrates two working learning controls and does not support
-a PPO-versus-SAC ranking.
-
-Run this limited matrix in order:
-
-1. **Wiring smoke test** — verify installation, training, evaluation, plots, and artifacts.
-2. **Native-policy checks** — verify IDM determinism and task feasibility.
-3. **Learning controls** — train PPO and SAC for at most 100,000 steps on one
-   straight road with no traffic. Validation runs every 25,000 steps; training stops after
-   saving a checkpoint that also stays at or below 10% collision, off-road, and timeout outcomes.
-4. **Held-out evaluation** — compare IDM, PPO, and SAC on 20 untouched test seeds.
-5. **Videos and report** — record one rollout per learned agent, generate the comparison,
-   and fill the report placeholders.
-
-Difficulty increases only after those deliverables exist: first test continuous PPO and
-unrestricted SAC steering on the same straight road, then use a fixed curved road, a small
-set of traffic-free procedural roads, and finally light traffic. A failure at one
-level is diagnosed at that level; it is not hidden by adding timesteps or more scenarios.
-Validation begins at seed 1000 and held-out testing at seed 4000. The road topology and
-no-traffic setting stay fixed while seeded straight-block parameters vary. This is a
-narrow reproducibility test, not evidence of broad procedural generalization. Seeds
-3000--3019 were consumed by the local diagnosis and are not reused for final reporting.
-Validation seeds are sent only to the simulator subprocess. They do not reset Python,
-NumPy, or PyTorch in the training process, so changing the validation episode count cannot
-silently change later PPO updates.
-
-## Google Colab driver notebook
-
-Use [`notebooks/phase1_colab_driver.ipynb`](notebooks/phase1_colab_driver.ipynb) from VS
-Code connected to a Google Colab runtime. The notebook uses this layout:
-
-```text
-VS Code --git push--> GitHub --clone/pull--> /content/safedrive
-                                                   |
-                                                   +--> /content/drive/MyDrive/SafeDrive
-                                                        persistent artifacts only
+```bash
+python -m pip uninstall -y gym
 ```
 
-GitHub and `/content/safedrive` are the source of truth for code. Do not run the repository
-directly from mounted Drive; Drive is slower for many small files and is used only to back
-up completed run directories, comparison outputs, and reports.
+## One canonical Colab notebook
 
-### Pulling Drive runs onto a Mac
+Open `notebooks/phase2_colab_driver.ipynb` in VS Code with a Google Colab runtime. It has
+exactly these sections:
 
-With Google Drive for desktop running, pull persistent artifacts into this repository's
-root `runs/` folder with:
+0. Project direction and experiment policy
+1. Constants and paths
+2. Runtime, CPU, RAM, CUDA, and L4 inspection
+3. Google Drive mount
+4. Clone or fast-forward pull repository
+5. Install repository and verify package versions
+6. Restore artifacts from Drive
+7. Compile, test, MetaDrive smoke test, and chase-camera smoke test
+8. Summarize existing Phase-1 and Phase-2 results without retraining
+9. Experiment 0: IDM and ExpertPolicy traffic solvability
+10. Experiment 1: frozen pre-adaptation evaluation matrix
+11. Experiment 2: seed-0 SAC-Traffic pilot
+12. Experiment 3: seed-0 SAC-Traffic-Safe pilot
+13. Pilot comparison and saved selection decision
+14. Experiment 5: selected seed-1 confirmation
+15. Final evaluation matrix
+16. Third-person videos
+17. Final plots and tables
+18. Build main and surrogate reports
+19. Final Drive synchronization
+
+The notebook runs the repository through visible `!python -m ...` entry points. It does
+not embed training or evaluation implementations. Completed runs are reused, paused runs
+resume, failed gates remain terminal, and unknown or mismatched states fail closed.
+
+The live clone is `/content/safedrive`. Persistent artifacts are stored under
+`/content/drive/MyDrive/SafeDrive`. Do not run Git directly from mounted Drive.
+
+## Experiment commands
+
+The notebook computes:
+
+```python
+CPU_COUNT = os.cpu_count() or 2
+N_ENVS = min(4, max(1, CPU_COUNT - 1))
+```
+
+Use `SubprocVecEnv` when `N_ENVS > 1`; one MetaDrive instance runs in each process.
+`gradient_steps` is resolved to `N_ENVS`.
+
+Run the native solvability gate:
+
+```bash
+python -m scripts.evaluate_baseline \
+  --config configs/sac_traffic_curriculum.yaml \
+  --policy expert \
+  --split validation \
+  --episodes 50 \
+  --densities 0.05 0.10 \
+  --prefix traffic_solvability_expert \
+  validation.num_scenarios=50
+```
+
+Freeze the source matrix for each completed geometry seed:
+
+```bash
+python -m scripts.evaluate \
+  --run-dir runs/<geometry-curriculum-run> \
+  --model best \
+  --split test \
+  --episodes 100 \
+  --densities 0.0 0.05 0.10 \
+  --prefix traffic_before
+```
+
+Run the seed-0 pilots:
+
+```bash
+python -m scripts.train_curriculum \
+  --config configs/sac_traffic_curriculum.yaml \
+  --variant reference \
+  --seed 0 \
+  --n-envs 4 \
+  --vec-env subproc \
+  --progress
+
+python -m scripts.train_curriculum \
+  --config configs/sac_traffic_curriculum.yaml \
+  --variant safety \
+  --seed 0 \
+  --n-envs 4 \
+  --vec-env subproc \
+  --progress
+```
+
+To resume a paused lineage, pass its saved run and reuse its resolved environment count:
+
+```bash
+python -m scripts.train_curriculum \
+  --config configs/sac_traffic_curriculum.yaml \
+  --variant reference \
+  --seed 0 \
+  --n-envs 4 \
+  --vec-env subproc \
+  --progress \
+  --run-dir runs/<traffic-run>
+```
+
+Evaluate both pilots and save the decision:
+
+```bash
+python -m scripts.evaluate \
+  --run-dir runs/<pilot> \
+  --model best \
+  --split validation \
+  --episodes 50 \
+  --densities 0.0 0.05 0.10 \
+  --prefix traffic_pilot \
+  validation.num_scenarios=50
+
+python -m scripts.compare_runs --traffic-extension --select-pilots
+```
+
+Run seed 1 with the `selected_variant` stored in
+`runs/traffic_extension_selection.json`, then evaluate the two source and two adapted
+lineages on the final test matrix.
+
+Run native controllers on that same matrix:
+
+```bash
+python -m scripts.evaluate_baseline \
+  --config configs/sac_traffic_curriculum.yaml \
+  --policy idm \
+  --split test \
+  --episodes 100 \
+  --densities 0.0 0.05 0.10 \
+  --prefix traffic_final_idm
+
+python -m scripts.evaluate_baseline \
+  --config configs/sac_traffic_curriculum.yaml \
+  --policy expert \
+  --split test \
+  --episodes 100 \
+  --densities 0.0 0.05 0.10 \
+  --prefix traffic_final_expert
+```
+
+Generate final tables and the five public plots:
+
+```bash
+python -m scripts.compare_runs --traffic-extension
+```
+
+## Metrics and fingerprints
+
+Per-episode CSVs retain raw non-exclusive MetaDrive flags and add one exclusive outcome:
+`success`, `collision`, `out_of_road`, `timeout`, or `other`.
+
+Summaries contain:
+
+- success rate and Wilson 95% interval;
+- aggregate collision, vehicle collision, object collision, and collision-free rates;
+- off-road and timeout rates;
+- return, episode length, cost, route completion, and speed;
+- mean absolute steering and mean action change;
+- episode count, training seed, density, source checkpoint, condition, and fingerprint.
+
+The comparison reports density-0.05 success gain and collision change, traffic-free
+success and route retention, density-0.10 degradation, and across-seed mean and standard
+deviation. Fingerprints retain the training definition, while final compatibility permits
+only the intended source/adaptation and collision-penalty differences and refuses
+undeclared scenario, map, traffic, reward, horizon, or learned-action mismatches.
+
+## Chase-camera video
+
+Chase view is the public default:
+
+```bash
+python -m scripts.record_video \
+  --run-dir runs/<adapted-run> \
+  --model best \
+  --view chase \
+  --density 0.05 \
+  --episodes-csv runs/<adapted-run>/eval/traffic_final_d005_episodes.csv \
+  --scenario-rule first_success
+```
+
+The recorder creates a separate offscreen environment with MetaDrive’s moving main
+camera. At the pinned commit, the recording-only environment must enable MetaDrive’s
+image-service switch to retain an offscreen camera; it simultaneously sets
+`agent_observation=LidarStateObservation`. The MLP therefore receives the same vector
+observation used in training, while rendered RGB frames are only encoded to MP4.
+The pinned macOS offscreen path also requires leaving MetaDrive's unused mouse flag
+enabled so `MainCamera` does not call a window-only method on a graphics buffer; all
+visible interface panels remain hidden.
+
+The pinned API is `main_camera.perceive(to_float=False)`. Expected frames are
+1280×720 RGB. Failure does not silently fall back to top-down; diagnostics include render
+mode, sensors, version, commit, and frame shape.
+
+Scenario selection is systematic: the lowest seed satisfying `first`, `first_success`,
+or `first_failure`. Sidecar JSON records model, seed, density, traffic mode, outcome,
+return, completion, collision, frames, FPS, camera settings, observation shape, and
+fingerprint. `--view topdown` remains available for diagnostics.
+
+## Progress, logging, and resources
+
+Training uses one SB3 progress bar per curriculum stage. `--progress` and
+`--no-progress` override the config. Evaluation uses tqdm only for episode loops. SB3
+tabular verbosity remains zero.
+
+Console output is concise. Detailed DEBUG logs record commands, resolved config, Git and
+package versions, hardware, checkpoint lineage, stage transitions, validation metrics,
+checkpoints, exceptions, and output paths. Startup records observation/action shapes,
+lidar beams, and policy/actor/critic parameter counts.
+
+`logs/resource_usage.csv` samples CPU, RAM, GPU utilization/memory when available, and
+environment steps per second about every 60 seconds.
+
+## Google Drive persistence and Mac analysis sync
+
+Persist one long run from Colab:
+
+```bash
+python -m scripts.sync_drive_runs \
+  --drive-project /content/drive/MyDrive/SafeDrive \
+  --to-drive \
+  --run-dir runs/<run>
+```
+
+The command atomically merges the run, updates and verifies its latest pointer, skips
+TensorBoard and intermediate checkpoints, and verifies critical config, metadata,
+lineage, model, replay, validation, log, and resource artifacts in Drive.
+
+Persist final comparisons, videos, report sources, bibliography, generated TeX, and PDFs:
+
+```bash
+python -m scripts.sync_drive_runs \
+  --drive-project /content/drive/MyDrive/SafeDrive \
+  --project-artifacts-to-drive
+```
+
+Restore all training artifacts in a fresh Colab session:
+
+```bash
+python -m scripts.sync_drive_runs \
+  --drive-project /content/drive/MyDrive/SafeDrive \
+  --local-runs /content/safedrive/runs \
+  --include-training-artifacts
+```
+
+On a Mac with Google Drive for desktop, this defaults to an analysis-only restore:
 
 ```bash
 python -m scripts.sync_drive_runs
 ```
 
-On macOS the script auto-detects a single
-`~/Library/CloudStorage/GoogleDrive-*/My Drive/SafeDrive` folder. The location can also be
-provided explicitly:
+It skips models, checkpoints, replay buffers, and TensorBoard data while retaining logs,
+metrics, plots, videos, and pointers.
 
-```bash
-python -m scripts.sync_drive_runs \
-  --drive-project "/Users/dhillo/Library/CloudStorage/GoogleDrive-dhillondheeraj84@gmail.com/My Drive/SafeDrive"
-```
+## Reports
 
-The operation is one-way from Drive to the repository. It merges completed and failed run
-artifacts, skips experiments still marked `running`, preserves local-only files, copies
-top-level comparison artifacts, and rebuilds the `latest_*.txt` pointers. The Mac default
-is analysis-only: it keeps resolved configs, metadata, evaluation CSV/JSON, logs,
-TensorBoard traces, plots, and videos, but does not even traverse Drive's `models/` or
-`checkpoints/` directories. Model archives, checkpoint archives, and replay-buffer pickle
-files therefore remain in Drive.
-
-Use `--dry-run` to preview a sync. To remove training artifacts downloaded by an older
-version of the script without changing Google Drive, run:
-
-```bash
-python -m scripts.sync_drive_runs --prune-local-training-artifacts
-```
-
-Section 4.1 of the Colab notebook passes `--include-training-artifacts` because the Colab
-checkout needs models and checkpoints for evaluation, video recording, and possible run
-continuation. That full mode should normally not be used on the Mac.
-
-Notebook run order:
-
-1. Define paths and experiment constants.
-2. Check the runtime, GPU, and PyTorch CUDA status.
-3. Mount Drive and approve Google's authentication prompt.
-4. Clone or fast-forward pull the public GitHub repository.
-5. Remove legacy Gym and install the repository with `pip install -e .`.
-6. Run the smoke test.
-7. Run the expert task-sanity and deterministic IDM reproducibility gates.
-8. Train the Phase-1 PPO and SAC controls, enforce their gates, and copy them to Drive.
-9. Inspect each qualifying validation summary.
-10. Run the IDM, best PPO, and best SAC held-out tests and copy them to Drive.
-11. Record one video for each learned agent.
-12. Build and display the Phase-1 comparison.
-13. Compile the report if `latexmk` is available, then perform the final artifact sync.
-
-The experiment sections are independent. In a later Colab session, rerun the setup
-sections and then continue from the required experiment. `PHASE1_TIMESTEPS` is 100,000;
-the success-first callback may stop earlier after saving a qualifying checkpoint.
-The smaller `notebooks/colab_smoke_test.ipynb` remains available as a quick VS Code,
-Colab, GitHub, Drive, GPU, and headless-MetaDrive connection check.
-
-## Phase-2 procedural generalization experiment
-
-Use [`notebooks/phase2_colab_driver.ipynb`](notebooks/phase2_colab_driver.ipynb) for the
-complete workflow. It reuses the Phase-1 GitHub, Colab, and Drive setup, closes Phase 1
-with an exact held-out IDM run and corrected videos, and then runs one focused study:
-
-- **Direct SAC:** train from scratch on 100 three-block procedural maps.
-- **Curriculum SAC:** train on `C`, then `SC`, then three-block procedural maps while
-  preserving actor, critic, optimizer, and replay-buffer state.
-- **Shared target:** full continuous control, no training traffic, 500,000 maximum steps,
-  25 fixed validation scenarios, and 100 untouched test scenarios.
-- **Ablation:** the training sequence is the intended difference; architecture, reward,
-  action interface, final task, test split, and total budget match.
-
-SafeDrive consumes `sequential_seed` in its own scenario wrapper because MetaDrive 0.4.3
-does not accept that name in the environment constructor. Training still cycles through
-all configured scenarios; explicit validation and test seeds remain unchanged.
-
-Every evaluation summary stores two compatibility hashes. The task hash covers map,
-traffic, horizon, termination, reward, and evaluation split. The strict hash also covers
-the policy-facing action interface, SAC architecture, normalization, stopping target, and
-maximum training budget. Phase-2 comparison requires the strict hash to match and refuses
-to produce a plot or report macros otherwise. Phase 1 permits only a
-descriptive task-outcome matrix because its controller interfaces intentionally differ.
-
-The Phase-2 notebook order is:
-
-1. Initialize paths, inspect the GPU, mount Drive, clone/pull, restore artifacts, and
-   install the repository.
-2. Run the lightweight wiring test.
-3. Rerun IDM on Phase-1 test seeds 4000--4019, generate the fingerprint-checked Phase-1
-   table, and record corrected PPO/SAC videos.
-4. Evaluate IDM and ExpertPolicy on the Phase-2 validation task to confirm feasibility.
-5. Train and test seed-0 direct SAC.
-6. Train seed-0 curriculum SAC in three resumable stage cells. Each stage is copied to
-   Drive before the next begins.
-7. Compare the two pilots. Confirmation runs are justified only if either policy reaches
-   50% success or 80% route completion.
-8. Conditionally run seeds 1 and 2 for both conditions.
-9. Evaluate Phase-2 IDM and ExpertPolicy on the exact test task, run the learned policies'
-   zero-shot light-traffic stress tests, create videos, and generate the final comparison.
-10. Compile both LaTeX reports and sync all final artifacts to Drive.
-
-The shared-helper cell makes this workflow restart-safe. After a fresh Colab kernel, run
-Sections 1--5 through the shared helpers. The helper reconstructs every available Phase-2
-run path and held-out summary from the pointers restored in Section 4.1, recomputes
-`PILOTS_PROMISING`, and lists complete direct/curriculum seed pairs. Training, evaluation,
-baseline, stress-test, and video cells reuse an existing completed artifact instead of
-rerunning it. A curriculum `paused` state advances from its next stage; `failed_gate` is a
-terminal experiment result and is never silently resumed. Comparisons automatically omit
-unpaired seeds.
-
-The direct command is:
-
-```bash
-python -m scripts.train \
-  --config configs/sac_phase2_direct.yaml \
-  --seed 0
-```
-
-The curriculum can run end-to-end:
-
-```bash
-python -m scripts.train_curriculum \
-  --config configs/sac_phase2_curriculum.yaml \
-  --seed 0
-```
-
-For safer Colab persistence, pause and sync at stage boundaries:
-
-```bash
-python -m scripts.train_curriculum \
-  --config configs/sac_phase2_curriculum.yaml \
-  --seed 0 \
-  --stop-after-stage curve
-
-python -m scripts.train_curriculum \
-  --config configs/sac_phase2_curriculum.yaml \
-  --run-dir runs/<curriculum-run> \
-  --seed 0 \
-  --stop-after-stage straight_curve
-
-python -m scripts.train_curriculum \
-  --config configs/sac_phase2_curriculum.yaml \
-  --run-dir runs/<curriculum-run> \
-  --seed 0
-```
-
-The large intermediate replay buffer is necessary for faithful curriculum continuation
-and is retained in Drive. The default Mac sync excludes the entire `models/` directory,
-so it is not downloaded for analysis. Phase 2 keeps SB3 timeout handling enabled and uses
-the standard replay layout because SB3 does not support timeout handling together with
-`optimize_memory_usage`. This uses roughly twice the observation storage of the compact
-layout, but it prevents horizon truncations from being learned as genuine terminal
-failures. Curriculum resume fails closed if its replay buffer was not restored.
-
-After explicit held-out evaluations, compare one or more complete seed pairs:
-
-```bash
-python -m scripts.compare_runs --phase2 --seeds 0
-python -m scripts.compare_runs --phase2 --seeds 0 1 2
-```
-
-Outputs include `phase2_seed_results.csv`, `phase2_comparison.csv/json/png`, combined
-training curves, optional light-traffic tables and plots, videos, and generated LaTeX
-macros. The comparison command fails closed if even one selected learned run has a
-different task, action interface, reward, or test split.
-
-## Command-line workflow
-
-Run the smoke test first:
-
-```bash
-python -m scripts.train --config configs/smoke_test.yaml
-```
-
-Run the rule-based reproducibility gate:
-
-```bash
-python -m scripts.evaluate_baseline \
-  --config configs/ppo_mvp.yaml \
-  --split validation \
-  --episodes 10 \
-  --prefix idm_repro \
-  --verify-repeat
-```
-
-Run the Phase-1 controls. These are the report runs; duplicating the same
-configuration would spend compute without answering a new question:
-
-```bash
-python -m scripts.train --config configs/ppo_mvp.yaml --run-name ppo_phase1_control
-
-python -m scripts.train --config configs/sac_mvp.yaml --run-name sac_phase1_control
-```
-
-The notebook enforces 80% success, 90% route completion, and maximum 10% collision,
-off-road, and timeout gates. If either control fails,
-stop and inspect its validation history and `training_diagnostics.json`; do not increase
-task difficulty. A passing run has already selected and frozen its validation winner
-without inspecting the held-out test split.
-
-Dotlist overrides remain available:
-
-```bash
-python -m scripts.train --config configs/ppo_mvp.yaml \
-  logging.console_level=DEBUG
-```
-
-The successful runs update `runs/latest_idm.txt`, `runs/latest_ppo.txt`, and
-`runs/latest_sac.txt`. The smoke test uses `runs/latest_smoke.txt`, so it cannot replace the
-latest report-quality PPO pointer.
-
-MetaDrive owns one process-global simulation engine. During training, validation
-runs in a separate subprocess even when PPO, SAC, or the smoke test uses one training
-environment. Do not configure more than one MetaDrive environment with `DummyVecEnv`; use
-`subproc` or set `n_envs: 1`.
-
-The PPO configuration keeps its MLP policy on CPU and collects experience in four
-MetaDrive subprocesses. Each update receives 4,096 samples and uses batches of 256. Its
-3-by-3 discrete action grid follows MetaDrive's beginner PPO example and removes
-destructive full-lock continuous exploration from the Phase-1 proof. More workers are not
-automatically better: keep `n_envs` at or below the runtime's logical CPU count.
-
-SAC keeps `device: auto`; Colab can use CUDA while a machine without CUDA falls back to
-CPU. The bounded run uses a 100,000-transition buffer, begins updates after 5,000 steps,
-and fixes the entropy coefficient at 0.05. The automatic control collapsed from about
-0.22 to near zero during diagnosis, but fixed entropy alone still failed with unrestricted
-steering. SAC's Phase-1 steering limit was the decisive task-boundary change. PPO instead
-uses the documented discrete control abstraction. Replay-buffer
-serialization is disabled because the file is large and is unnecessary for
-evaluation, plots, or videos. The selected device is printed and saved in
-`run_metadata.json`.
-
-MetaDrive's vector observation is already bounded in `[0, 1]`, so the configs do not add
-`VecNormalize`. Phase 1 deliberately returns to MetaDrive's documented reference reward:
-dense longitudinal progress and speed, plus terminal success/failure values. The previous
-custom penalties created a profitable stall policy under a long horizon. Safety remains
-visible through success, collision, off-road, timeout, and cost metrics. The 500-step
-horizon is treated as a Gymnasium truncation so value learning can bootstrap through the
-artificial time limit.
-
-After both learned configurations are frozen, run the IDM test and evaluate each trained
-best model on the same held-out split:
-
-```bash
-python -m scripts.evaluate_baseline \
-  --config configs/ppo_mvp.yaml \
-  --split test \
-  --episodes 20 \
-  --prefix idm_test
-
-python -m scripts.evaluate \
-  --run-dir runs/<ppo-run> \
-  --model best \
-  --split test \
-  --episodes 20 \
-  --prefix best_test
-```
-
-If an interrupted short run did not create `best_model.zip`, the evaluation command gives
-a clear error and can be rerun with `--model final`. Video recording falls back from best
-to final automatically with a warning:
-
-```bash
-python -m scripts.record_video \
-  --run-dir runs/<ppo-run> \
-  --model best \
-  --seed 4007 \
-  --steps 1000
-```
-
-## Interpreting a weak PPO result
-
-The smoke test is intentionally easier than the Phase-1 benchmark: it has no traffic, two
-simple scenarios, and only checks wiring. It is not a performance baseline. Compare PPO
-with IDM on the same held-out seeds instead.
-
-Always evaluate `best_model.zip` before judging a completed run. The final PPO update can
-be worse than an earlier checkpoint. The best checkpoint is now selected first by
-validation success and then by route completion and lower failure rates, instead of mean
-reward alone. New runs save `best_vecnormalize.pkl` beside the best model so that checkpoint
-is evaluated with the matching observation statistics. Older runs fall back to final
-normalization statistics with a warning.
-
-To distinguish poor learning from poor generalization, evaluate the same model on its
-training seed range under a separate prefix:
-
-```bash
-python -m scripts.evaluate \
-  --run-dir runs/<ppo-run> \
-  --model best \
-  --split train \
-  --episodes 50 \
-  --prefix best_train_seeds
-```
-
-High training-seed success with low validation success indicates overfitting. Low success
-on both ranges indicates an optimization, reward, termination, or task-difficulty problem.
-Do not respond by jumping directly to more maps, traffic, or reward terms. First reproduce
-the straight-road control; then change one difficulty dimension at a time.
-
-Manual summary comparison is still supported:
-
-```bash
-python -m scripts.compare_runs \
-  --summaries \
-    runs/<ppo-run>/eval/best_test_summary.json \
-    runs/<sac-run>/eval/best_test_summary.json \
-  --output runs/ppo_vs_sac_eval_summary.png
-```
-
-After the IDM, PPO, and SAC latest pointers exist, generate the complete comparison with:
-
-```bash
-python -m scripts.compare_runs --phase1
-```
-
-## Expected outputs
-
-Each training run contains:
-
-```text
-run_dir/
-├── resolved_config.yaml
-├── run_metadata.json
-├── logs/
-│   ├── train.log
-│   ├── train_monitor/*.monitor.csv
-│   ├── training_diagnostics.json
-│   └── tensorboard/                 # when enabled
-├── models/
-│   ├── final_model.zip
-│   ├── best_model.zip               # success-first validation winner
-│   ├── vecnormalize.pkl              # only when normalization is enabled
-│   ├── best_vecnormalize.pkl         # only when normalization is enabled
-│   └── replay_buffer.pkl             # SAC only when explicitly enabled
-├── checkpoints/
-├── eval/
-│   ├── validation_history.json
-│   ├── best_validation_episodes.csv
-│   ├── best_validation_summary.json
-│   ├── best_test_episodes.csv
-│   └── best_test_summary.json
-├── plots/
-│   ├── training_returns.png
-│   ├── eval_route_completion.png
-│   └── eval_outcome_rates.png
-└── videos/
-    ├── <algorithm>_<best-or-final>_seed<seed>_topdown.mp4
-    └── <algorithm>_<best-or-final>_seed<seed>_topdown.json
-```
-
-The IDM run uses the same evaluation CSV, summary JSON, plots, log, and metadata layout,
-without models or training. The project-level final outputs are:
-
-```text
-runs/phase1_manifest.jsonl
-runs/phase1_comparison.csv
-runs/phase1_comparison.json
-runs/phase1_comparison.png
-runs/phase1_training_returns.png       # when both monitor logs are available
-runs/phase1_compare.log
-reports/main.pdf                       # when LaTeX is compiled
-```
-
-Console output is intentionally concise. Detailed arguments, system and package versions,
-Git commit, CUDA/GPU information, resolved configuration, paths, and exception stack traces
-live in each operation's log file.
-
-## Metrics
-
-Per-episode CSV files include the episode number, scenario seed, shaped and base return,
-reward-shaping penalty, length, success, collision, off-road, timeout, cumulative cost,
-route completion, mean speed, steering/throttle/brake behavior, action variation, and
-serialized final MetaDrive `info` data.
-
-Summary JSON files include:
-
-- episode count;
-- mean and standard deviation of return;
-- mean episode length;
-- success, collision, off-road, and timeout rates;
-- a 95% Wilson confidence interval for success rate;
-- mean cost;
-- mean route completion;
-- mean speed when MetaDrive exposes it;
-- mean base return and shaping penalty;
-- steering magnitude and saturation, throttle/brake rates, and action variation.
-
-## Report
-
-`reports/main.tex` is the concise portfolio report. It compiles before results exist and
-uses explicit TODO fields until the final values are copied from
-`runs/phase1_comparison.csv`. `reports/surrogate_notes.tex` holds exact commands,
-hyperparameters, runtime metadata, failed attempts, implementation notes, and deferred
-ideas.
-
-Build from the repository root:
+Build the compact two-column public report and detailed two-column surrogate:
 
 ```bash
 latexmk -cd -pdf -interaction=nonstopmode -halt-on-error reports/main.tex
+latexmk -cd -pdf -interaction=nonstopmode -halt-on-error reports/surrogate_notes.tex
 ```
+
+`reports/main.tex` shows pending traffic results until
+`runs/traffic_extension_comparison.*` and `reports/generated_traffic_results.tex` exist.
+No geometry metric is relabeled as a traffic-adaptation result.
+
+## Final outputs
+
+```text
+runs/traffic_extension_seed_results.csv
+runs/traffic_extension_comparison.csv
+runs/traffic_extension_comparison.json
+runs/traffic_extension_selection.json
+runs/traffic_extension_outcomes.png
+runs/traffic_extension_success_collision.png
+runs/traffic_extension_route_completion.png
+runs/traffic_extension_training_returns.png
+runs/traffic_extension_retention.png
+reports/generated_traffic_results.tex
+reports/main.pdf
+reports/surrogate_notes.pdf
+```
+
+Until the three Colab training runs finish, traffic adaptation remains an implemented,
+predeclared experiment—not a claimed result.

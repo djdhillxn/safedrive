@@ -94,6 +94,25 @@ def _episode_row(
     route_completion,
     final_info,
 ):
+    success = _safe_bool(final_info, SUCCESS_KEYS)
+    crash_vehicle = _safe_bool(final_info, ("crash_vehicle",))
+    crash_object = _safe_bool(
+        final_info,
+        ("crash_object", "crash_building", "crash_sidewalk", "crash_human"),
+    )
+    crash = _safe_bool(final_info, CRASH_KEYS)
+    out_of_road = _safe_bool(final_info, OUT_OF_ROAD_KEYS)
+    max_step = _safe_bool(final_info, MAX_STEP_KEYS)
+    if success:
+        terminal_outcome = "success"
+    elif crash:
+        terminal_outcome = "collision"
+    elif out_of_road:
+        terminal_outcome = "out_of_road"
+    elif max_step:
+        terminal_outcome = "timeout"
+    else:
+        terminal_outcome = "other"
     row = {
         "episode": episode,
         "env_seed": _safe_int(
@@ -105,10 +124,14 @@ def _episode_row(
         "base_return_sum": base_return_sum,
         "shaping_penalty_sum": shaping_penalty_sum,
         "length": length,
-        "success": _safe_bool(final_info, SUCCESS_KEYS),
-        "crash": _safe_bool(final_info, CRASH_KEYS),
-        "out_of_road": _safe_bool(final_info, OUT_OF_ROAD_KEYS),
-        "max_step": _safe_bool(final_info, MAX_STEP_KEYS),
+        "success": success,
+        "crash": crash,
+        "crash_vehicle": crash_vehicle,
+        "crash_object": crash_object,
+        "collision_free": not crash,
+        "out_of_road": out_of_road,
+        "max_step": max_step,
+        "terminal_outcome": terminal_outcome,
         "cost_sum": cost_sum,
         "route_completion": _safe_float(
             final_info,
@@ -315,6 +338,13 @@ def summarize_metrics(frame):
     """Aggregate per-episode metrics into report-ready numbers."""
     if frame.empty:
         return {}
+    frame = frame.copy()
+    if "collision_free" not in frame:
+        frame["collision_free"] = ~frame["crash"].astype(bool)
+    if "crash_vehicle" not in frame:
+        frame["crash_vehicle"] = frame["crash"].astype(bool)
+    if "crash_object" not in frame:
+        frame["crash_object"] = False
     episodes = int(len(frame))
     successes = int(frame["success"].sum())
     success_low, success_high = _wilson_interval(successes, episodes)
@@ -327,6 +357,9 @@ def summarize_metrics(frame):
         "success_rate_95ci_low": success_low,
         "success_rate_95ci_high": success_high,
         "collision_rate": float(frame["crash"].mean()),
+        "collision_free_rate": float(frame["collision_free"].mean()),
+        "crash_vehicle_rate": float(frame["crash_vehicle"].mean()),
+        "crash_object_rate": float(frame["crash_object"].mean()),
         "out_of_road_rate": float(frame["out_of_road"].mean()),
         "timeout_or_max_step_rate": float(frame["max_step"].mean()),
         "mean_cost": float(frame["cost_sum"].mean()),
@@ -376,6 +409,9 @@ def comparison_summary_row(name, summary, run_dir=None, summary_path=None):
         "success_rate_95ci_low",
         "success_rate_95ci_high",
         "collision_rate",
+        "collision_free_rate",
+        "crash_vehicle_rate",
+        "crash_object_rate",
         "out_of_road_rate",
         "timeout_or_max_step_rate",
         "mean_cost",

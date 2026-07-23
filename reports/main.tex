@@ -1,341 +1,373 @@
-\documentclass[11pt]{article}
+\documentclass[10pt,twocolumn]{article}
 
-\usepackage[margin=1in]{geometry}
+\usepackage[letterpaper,margin=0.9in,columnsep=0.25in]{geometry}
+\usepackage{microtype}
 \usepackage{booktabs}
 \usepackage{graphicx}
+\usepackage[font=small,labelfont=bf]{caption}
 \usepackage[hidelinks]{hyperref}
+\usepackage{balance}
 \usepackage{xcolor}
-\emergencystretch=2em
+\linespread{1.05}
 
-\title{SafeRL-Drive: Curriculum Learning for Procedural Driving in MetaDrive}
+\title{\vspace{-1.4em}\textbf{SafeRL-Drive: Traffic-Aware Reinforcement Learning\\
+in Procedural Driving Scenarios}\vspace{-0.4em}}
 \author{Dheeraj Dhillon}
-\date{\today}
+\date{}
 
-% Phase-1 values are the exact fingerprint-compatible 20-episode test results.
-\newcommand{\PpoSuccess}{100.0\%}
-\newcommand{\SacSuccess}{100.0\%}
-\newcommand{\IdmSuccess}{100.0\%}
-\newcommand{\PpoCollision}{0.0\%}
-\newcommand{\SacCollision}{0.0\%}
-\newcommand{\IdmCollision}{0.0\%}
-\newcommand{\PpoOffRoad}{0.0\%}
-\newcommand{\SacOffRoad}{0.0\%}
-\newcommand{\IdmOffRoad}{0.0\%}
-\newcommand{\PpoCompletion}{96.1\%}
-\newcommand{\SacCompletion}{95.7\%}
-\newcommand{\IdmCompletion}{95.6\%}
-
-\newcommand{\DirectSuccess}{12.0\%}
-\newcommand{\CurriculumSuccess}{87.0\%}
-\newcommand{\DirectCollision}{15.5\%}
-\newcommand{\CurriculumCollision}{0.0\%}
-\newcommand{\DirectOffRoad}{83.0\%}
-\newcommand{\CurriculumOffRoad}{9.5\%}
-\newcommand{\DirectTimeout}{5.0\%}
-\newcommand{\CurriculumTimeout}{3.5\%}
-\newcommand{\DirectCompletion}{47.0\%}
-\newcommand{\CurriculumCompletion}{95.1\%}
-
-\newif\ifphaseoneresults
-\newif\ifphasetworesults
-\IfFileExists{generated_phase1_results.tex}{
-  \phaseoneresultstrue\input{generated_phase1_results.tex}
+\newcommand{\TrafficSuccessZero}{--}
+\newcommand{\TrafficSuccessPrimary}{--}
+\newcommand{\TrafficSuccessStress}{--}
+\newcommand{\TrafficCollisionZero}{--}
+\newcommand{\TrafficCollisionPrimary}{--}
+\newcommand{\TrafficCollisionStress}{--}
+\newcommand{\TrafficRouteZero}{--}
+\newcommand{\TrafficRoutePrimary}{--}
+\newcommand{\TrafficRouteStress}{--}
+\newcommand{\TrafficPrimaryGain}{--}
+\newcommand{\TrafficPrimaryCollisionChange}{--}
+\newcommand{\TrafficFreeSuccessChange}{--}
+\newcommand{\TrafficFreeRouteChange}{--}
+\newcommand{\TrafficStressSuccessChange}{--}
+\newcommand{\TrafficSourceSuccessPrimary}{--}
+\newcommand{\TrafficSourceCollisionPrimary}{--}
+\newcommand{\TrafficSourceRoutePrimary}{--}
+\newcommand{\TrafficIdmSuccessPrimary}{--}
+\newcommand{\TrafficIdmCollisionPrimary}{--}
+\newcommand{\TrafficIdmRoutePrimary}{--}
+\newcommand{\TrafficExpertSuccessPrimary}{--}
+\newcommand{\TrafficExpertCollisionPrimary}{--}
+\newcommand{\TrafficExpertRoutePrimary}{--}
+\newcommand{\TrafficAdaptedSeedCount}{--}
+\newif\iftrafficresults
+\IfFileExists{generated_traffic_results.tex}{
+  \trafficresultstrue\input{generated_traffic_results.tex}
 }{
-  \IfFileExists{reports/generated_phase1_results.tex}{
-    \phaseoneresultstrue\input{reports/generated_phase1_results.tex}
-  }{\phaseoneresultsfalse}
-}
-\IfFileExists{generated_phase2_results.tex}{
-  \phasetworesultstrue\input{generated_phase2_results.tex}
-}{
-  \IfFileExists{reports/generated_phase2_results.tex}{
-    \phasetworesultstrue\input{reports/generated_phase2_results.tex}
-  }{\phasetworesultsfalse}
+  \IfFileExists{reports/generated_traffic_results.tex}{
+    \trafficresultstrue\input{reports/generated_traffic_results.tex}
+  }{\trafficresultsfalse}
 }
 
 \begin{document}
-
+\twocolumn[
 \maketitle
-
 \begin{abstract}
-SafeRL-Drive is a reproducible student study of closed-loop reinforcement learning in
-MetaDrive. Phase 1 established a trustworthy training and evaluation pipeline on a
-traffic-free straight road. Frozen PPO and SAC policies each achieved 100\% success on 20
-held-out episodes, although action analysis showed that PPO solved this simple task with a
-constant open-loop command while SAC learned state-dependent continuous control. Phase 2
-therefore focuses on SAC and asks whether a staged road-geometry curriculum improves
-generalization to unseen three-block procedural maps under the same maximum budget as
-direct training.
-Across two complete, fingerprint-compatible seed pairs, curriculum SAC achieved 87\%
-held-out success against 12\% for direct SAC, while raising route completion from 47.0\%
-to 95.1\%. A zero-shot light-traffic test then exposed the remaining limitation:
-curriculum SAC retained 69\% success but collided in 21\% of episodes. The project has
-therefore answered its geometry-curriculum question; one bounded traffic-adaptation study
-is proposed as the final portfolio extension.
-Resolved configurations, strict experiment fingerprints, logs, per-episode metrics,
-plots, videos, and Google Drive artifacts make each claim auditable.
+\noindent
+SafeRL-Drive studies whether a continuous-control policy that has learned procedural road
+geometry can adapt to moving traffic without forgetting traffic-free driving. The learned
+Soft Actor-Critic (SAC) policy controls one ego vehicle; MetaDrive's native traffic
+manager controls all surrounding vehicles. Earlier controls established a reproducible
+pipeline and showed that a staged geometry curriculum raises held-out success from 12\%
+to 87\% relative to equal-budget direct SAC. The same frozen curriculum policies achieved
+69\% success but 21\% collision under a zero-shot density-0.05 traffic shift, motivating
+one bounded extension. Two seed-0 warm-start pilots differ only in collision penalty; a
+predeclared rule selects one for a seed-1 confirmation. Final evaluation pairs both
+lineages on 100 fixed scenarios at densities 0, 0.05, and 0.10 and reports success,
+collision, route completion, and traffic-free retention. This document distinguishes
+the verified geometry evidence from traffic results that still require the planned Colab
+runs; it makes no real-world safety claim.
 \end{abstract}
+\vspace{0.7em}
+]
 
 \section{Introduction}
-Closed-loop simulation evaluates a driving policy through the consequences of its own
-actions. MetaDrive is particularly appropriate because its procedural generator can create
-diverse road structures and disjoint scenario sets for generalization experiments
-\cite{li2022metadrive}. The project began with PPO and SAC because they provide standard
-on-policy and off-policy learning controls \cite{schulman2017ppo,haarnoja2018sac}. The aim
-is not production autonomy. It is a compact, reproducible experiment that demonstrates
-learning, exposes failure modes honestly, and tests one meaningful generalization
-hypothesis.
+Closed-loop simulation exposes a driving policy to the consequences of its own actions.
+MetaDrive combines procedural road generation, reactive background traffic, physics, and
+vector observations in a lightweight environment suited to generalization experiments
+\cite{li2022metadrive}. SafeRL-Drive uses these features for a narrow student research
+question:
 
-\section{Scope and Success Criteria}
-Phase 1 is a pipeline and basic-control gate. A frozen policy qualifies with at least 80\%
-success and 90\% mean route completion, with no more than 10\% collision, off-road, or
-timeout outcomes on 20 untouched episodes. Phase 2 changes one main dimension: road
-geometry. Its target uses three procedurally generated blocks, full continuous control,
-no training traffic, 100 training scenarios, 25 validation scenarios, and 100 disjoint
-test scenarios. The same outcome thresholds are retained, and a train-to-test success gap
-above 15 percentage points is treated as weak generalization.
+\begin{quote}\small
+\emph{Can a geometry-competent SAC policy adapt to interactive procedural traffic while
+reducing collisions and retaining traffic-free road-generalization ability?}
+\end{quote}
 
-Image observations, real-world scenario replay, multi-agent learning, vehicle-dynamics
-randomization, obstacle curricula, and explicit safe-RL algorithms remain outside Phase 2.
-Light traffic is used only as a zero-shot stress test after the traffic-free policy is
-frozen.
+The claim is intentionally smaller than autonomous driving. The project does not model
+real sensors, perception uncertainty, pedestrians, adverse weather, or deployment risk.
+It tests reproducible learning and retention in one simulator.
 
-\section{Phase-1 Setup}
-Both learned agents used MetaDrive's bounded vector observation and reference reward.
-Training used seed 0 on one straight topology with fixed spawning, no traffic, and a
-500-step horizon. Validation used seeds 1000--1009. Final testing used seeds 4000--4019
-and was not consulted during checkpoint selection. PPO used a $3\times3$ discrete
-steering/throttle grid and CPU learning. SAC used continuous throttle/brake and steering
-limited to $[-0.1,0.1]$ for the straight-road gate. Because these policy-facing action
-interfaces differ, Phase 1 is a descriptive control matrix rather than a fair algorithm
-ranking.
+\section{Single-Agent Traffic Formulation}
+The task is single-agent reinforcement learning. SAC controls one ego vehicle with
+continuous steering and throttle/brake. MetaDrive independently spawns and controls
+background traffic with its native policies. Every condition fixes
+\texttt{num\_agents=1} and \texttt{is\_multi\_agent=false}; no surrounding policy is
+trained.
 
-\section{Phase-1 Results}
-\begin{table}[h]
-  \centering
-  \caption{Fingerprint-compatible held-out fixed-straight-road outcomes on seeds
-  4000--4019.}
-  \label{tab:phase1-results}
-  \begin{tabular}{lcccc}
-    \toprule
-    Agent & Success & Collision & Off-road & Route completion \\
-    \midrule
-    IDM & \IdmSuccess & \IdmCollision & \IdmOffRoad & \IdmCompletion \\
-    PPO & \PpoSuccess & \PpoCollision & \PpoOffRoad & \PpoCompletion \\
-    SAC & \SacSuccess & \SacCollision & \SacOffRoad & \SacCompletion \\
-    \bottomrule
-  \end{tabular}
+The policy receives MetaDrive's default bounded LidarState vector: ego state, navigation
+and road features, and lidar information about nearby vehicles. Training never uses an
+RGB observation or CNN. A separate recording environment activates the moving main
+camera while retaining the same vector observation for policy inference.
+
+All tasks use three-block procedural maps, a 1,000-step horizon, fixed spawn lanes,
+continuous full-range actions, and zero accident probability. Training cycles through
+200 scenarios from seed 40000. Validation starts at 50000; the held-out test starts at
+60000. Evaluation traffic is deterministic conditional on its scenario seed
+(\texttt{random\_traffic=false}, \texttt{traffic\_mode=respawn}).
+
+\section{Geometry Curriculum as Initialization}
+Phase 1 established the infrastructure on an intentionally easy straight, traffic-free
+road. IDM, PPO, and SAC each reached 100\% success on 20 held-out episodes. Because PPO
+used a discrete action grid while SAC used continuous control, these were pipeline
+controls rather than a fair algorithm ranking.
+
+Phase 2 asked whether staged road geometry helps SAC generalize. Direct SAC trained on
+three-block procedural maps. Curriculum SAC trained first on curves, then
+straight-plus-curve roads, and finally on the same procedural target. Architecture,
+reward, action space, maximum 500,000-step budget, and test split matched.
+
+\begin{table}[t]
+\centering
+\caption{Verified Phase-2 held-out means across two completed seeds.}
+\label{tab:geometry}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lrrrr}
+\toprule
+Condition & Succ. & Coll. & Off-road & Route \\
+\midrule
+Direct SAC & 12.0\% & 15.5\% & 83.0\% & 47.0\% \\
+Curriculum SAC & 87.0\% & 0.0\% & 9.5\% & 95.1\% \\
+\bottomrule
+\end{tabular}
 \end{table}
 
-PPO achieved 100\% success, 96.1\% route completion, and zero reported failures on the
-20 held-out episodes. Every deterministic action was exactly zero steering and full
-throttle. Its sampled training rollouts remained noisy at the stopping checkpoint, with
-3\% rolling success and 96\% off-road outcomes. The result proves that the discrete
-pipeline can select a successful deterministic command, but not that PPO learned a robust
-feedback controller.
+The curriculum improved success by 75 percentage points and route completion by 48
+points (Table~\ref{tab:geometry}). Seed 0 improved from 24\% to 86\% success and seed 1
+from 0\% to 88\%. A third curriculum launch failed its mandatory curve gate and is
+retained as negative evidence. These results motivate warm start, not a claim that the
+optimizer is uniformly reliable.
 
-SAC also achieved 100\% success and zero failures, with 95.7\% route completion. Its
-sampled training success rose from 30\% at 30,000 steps to 58\%, 93\%, and 100\% by
-45,000 steps. Held-out actions included small steering corrections, throttle modulation,
-and occasional braking. SAC therefore supplies the better evidence of state-dependent
-control and is the sole learned algorithm advanced to Phase 2.
+The frozen policies were then evaluated without traffic training at density 0.05.
+Direct SAC averaged 3.5\% success and 37\% collision. Curriculum SAC averaged 69\%
+success, 21\% collision, 6\% off-road, and 87.1\% route completion. This is promising
+transfer but not traffic competence.
 
-For either 20-of-20 result, the 95\% Wilson interval for the underlying episode success
-probability is 83.9--100\%. The point estimates pass the predeclared gate, but the interval
-and single training seed rule out a strong robustness claim.
+\section{Traffic-Adaptation Design}
+The extension uses exactly three long runs. Both seed-0 pilots start from the corresponding
+best geometry-curriculum checkpoint and receive fresh traffic replay buffers. Their only
+intended learning difference is collision penalty:
 
-IDM achieved 100\% success, 95.6\% route completion, and zero failures on the same 20
-held-out episodes. Its earlier validation reproducibility gate also produced identical
-per-scenario outcomes across two fresh runs. The task fingerprints match for all three
-agents. The result remains a descriptive task-outcome comparison because IDM, discrete
-PPO, and continuous SAC expose different action interfaces.
+\begin{table}[t]
+\centering
+\caption{Controlled seed-0 traffic pilots.}
+\label{tab:pilots}
+\begin{tabular}{lrr}
+\toprule
+Setting & Reference & Safety \\
+\midrule
+Vehicle collision penalty & 5 & 10 \\
+Object collision penalty & 5 & 10 \\
+Success reward & 10 & 10 \\
+Off-road penalty & 5 & 5 \\
+New transitions & 300k & 300k \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-\ifphaseoneresults
-\begin{figure}[h]
-  \centering
-  \IfFileExists{../runs/phase1_comparison.png}{
-    \includegraphics[width=0.92\linewidth]{../runs/phase1_comparison.png}
-  }{
-    \includegraphics[width=0.92\linewidth]{runs/phase1_comparison.png}
-  }
-  \caption{Fingerprint-checked Phase-1 held-out task outcomes. The controller interfaces
-  differ, so the plot is descriptive rather than an algorithm ranking.}
+Each pilot uses 100,000 maximum transitions at density 0.02 followed by 200,000 at
+density 0.05. Stage A must reach 70\% success, 80\% route completion, at most 25\%
+collision, and at most 15\% off-road on 25 fixed validation scenarios. A miss pauses
+the lineage; it does not trigger another pilot.
+
+SAC~\cite{haarnoja2018sac} is implemented with
+Stable-Baselines3~\cite{raffin2021sb3} and uses an MLP with two 256-unit layers,
+learning rate $10^{-4}$, a 300,000-transition
+buffer, 5,000 learning-start transitions, batch size 512, discount 0.99, target smoothing
+0.005, fixed entropy coefficient 0.05, and one-step update frequency. Parallel simulator
+processes are capped at four, and gradient steps equal the number of environments so the
+update-to-data ratio remains approximately stable.
+
+At the end of seed 0, both pilots are evaluated at densities 0, 0.05, and 0.10 on 50
+validation scenarios. Qualification at density 0.05 requires at least 80\% success and
+90\% route completion, at most 10\% collision and off-road, and no more than a ten-point
+traffic-free success loss. If both qualify, lower collision wins, with success and then
+route completion as declared tie-breakers. If neither qualifies, higher primary success
+wins unless within five points, when lower collision wins. Only the selected condition is
+confirmed from the seed-1 geometry checkpoint.
+
+\section{Evaluation Protocol}
+Frozen source and selected adapted policies from seeds 0 and 1 are evaluated on identical
+scenario IDs at densities 0, 0.05, and 0.10. IDMPolicy and ExpertPolicy run on the same
+matrix. Each policy--density condition contains 100 deterministic episodes.
+
+Per-episode output retains MetaDrive's overlapping raw flags and adds one exclusive
+terminal outcome: success, collision, off-road, timeout, or other. Summaries include a
+Wilson 95\% interval for success; aggregate and vehicle-specific collision; collision-free,
+off-road, and timeout rates; return, length, cost, speed, steering magnitude, action
+change, and route completion. Environment, reward, action, split, and training metadata
+are hashed. Comparisons fail closed when task definitions differ.
+
+The primary contrasts are density-0.05 success gain and collision change. Retention is the
+change in density-0 success and route completion. Density 0.10 measures stress degradation,
+not a tuning target. Means and sample standard deviations are reported only across
+completed adaptation lineages; a failed gate remains labeled diagnostic evidence rather
+than being averaged as zero or hidden.
+
+\section{Reproducibility Contract}
+Each training run writes an immutable resolved configuration, source-lineage record,
+source checkpoint SHA-256 digest, curriculum state, selected and resumable models, and
+its own traffic replay buffer. The warm start transfers actor, critic, and target-network
+parameters into a newly constructed SAC instance; it intentionally does not transfer the
+source optimizer or traffic-free replay distribution. Observation and action shapes,
+dtypes, and bounds must match before any parameter is loaded.
+
+The runner may occupy up to four independent MetaDrive subprocesses, but never places
+multiple engines in one process. A paused traffic run resumes only with its recorded
+environment count, gradient-step count, reward variant, and stage definition. Completed
+runs are reused and never overwritten. Atomic metadata and latest-pointer replacement
+let a restarted notebook distinguish a resumable run from a mismatched or completed one.
+
+Evaluation artifacts include full episode CSVs and condition summaries. A fingerprint
+binds map, traffic, horizon, reward, action interface, test split, controller, and
+training context. Existing results are reused only on an exact fingerprint match.
+Training also records package and hardware versions plus periodic CPU, RAM, GPU-memory,
+and throughput samples. Critical artifacts are copied from the live Colab clone to Drive
+after every long run and verified at the destination.
+
+\section{Execution Gates and Public Artifacts}
+No adaptation begins until two non-learning gates pass. First, native IDMPolicy and
+ExpertPolicy each run 50 fixed validation scenarios at densities 0.05 and 0.10. This
+checks task solvability and establishes controller ceilings without treating either
+hand-engineered policy as a learned baseline. Second, ExpertPolicy produces an actual
+headless chase-camera frame sequence. A rendering failure stops execution rather than
+silently substituting an easier top-down view.
+
+The complete workflow lives in one Colab notebook with 20 ordered sections: runtime and
+Drive setup; compilation and smoke gates; historical summaries; native baselines; frozen
+source matrices; the two seed-0 pilots; saved variant selection; seed-1 confirmation;
+final matrices; videos; plots; reports; and final synchronization. Long cells consult
+latest pointers and curriculum state, so a disconnected runtime can restore artifacts
+and continue at the next unfinished section.
+
+Five final video roles are declared before seeing their appearance. The frozen and
+adapted policies share the lowest evaluated density-0.05 scenario seed for a direct
+before/after comparison. The success video uses the lowest successful adapted scenario;
+the diagnostic failure uses the lowest failed one when any failure exists. ExpertPolicy
+provides the native demonstration. Every MP4 has a JSON sidecar with model, selection
+rule, scenario, density, outcome, return, completion, collision, frame count, camera
+settings, and experiment fingerprint.
+
+The public artifact set is deliberately small: five comparison figures, seed-level and
+aggregate CSV/JSON tables, the selection JSON, selected videos, and this report. This
+keeps the conclusion tied to the research question instead of turning implementation
+diagnostics into additional experiments.
+
+\section{Predeclared Interpretation}
+The study separates three claims that are easy to blur. The exposure claim asks whether
+the adapted policy improves density-0.05 success relative to its own frozen source. The
+safety-ablation claim asks whether doubling only vehicle and object collision penalties
+changes the success--collision trade-off under identical seed-0 data and optimization.
+The retention claim asks whether either improvement preserves the source policy's
+traffic-free success and route completion. Density 0.10 is reported as stress
+generalization and never participates in checkpoint selection.
+
+A low collision rate alone is not positive evidence. A policy that brakes indefinitely
+will appear collision-free but will lose success, completion, and episode length through
+timeouts. The qualifying gate therefore requires all four primary behaviors. Conversely,
+a success increase accompanied by greater collision may be useful learning evidence but
+does not answer the stated safety question. The report retains both values instead of
+collapsing them into one reward score.
+
+The reward comparison is exploratory at seed 0 because it selects the confirmation
+variant. Only the winning rule is confirmed at seed 1, so the final estimate describes
+two adapted lineages rather than an unbiased two-seed comparison of both rewards. Native
+controllers establish solvability ceilings, not statistical competitors: they use
+simulator-specific control logic and do not share SAC's learned action mapping.
+
+The result remains interpretable if all gates fail. In that case the evidence says that
+this bounded warm-start and reward intervention did not reliably solve interactive
+traffic under the allotted 300,000-transition budget. The protocol does not add another
+seed, tune a third penalty, or replace the architecture after observing failure. This
+stopping rule is central to keeping a negative result as credible as a positive one.
+
+\section{Traffic Results}
+\iftrafficresults
+\begin{table}[t]
+\centering
+\caption{Selected adapted SAC means across \TrafficAdaptedSeedCount{} completed
+adaptation lineage(s).}
+\label{tab:traffic}
+\begin{tabular}{lrrr}
+\toprule
+Density & Success & Collision & Route \\
+\midrule
+0.00 & \TrafficSuccessZero & \TrafficCollisionZero & \TrafficRouteZero \\
+0.05 & \TrafficSuccessPrimary & \TrafficCollisionPrimary & \TrafficRoutePrimary \\
+0.10 & \TrafficSuccessStress & \TrafficCollisionStress & \TrafficRouteStress \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Primary density-0.05 comparison. Native controllers are ceilings.}
+\label{tab:primary}
+\begin{tabular}{lrrr}
+\toprule
+Condition & Success & Collision & Route \\
+\midrule
+Frozen SAC & \TrafficSourceSuccessPrimary & \TrafficSourceCollisionPrimary &
+\TrafficSourceRoutePrimary \\
+Adapted SAC & \TrafficSuccessPrimary & \TrafficCollisionPrimary &
+\TrafficRoutePrimary \\
+IDMPolicy & \TrafficIdmSuccessPrimary & \TrafficIdmCollisionPrimary &
+\TrafficIdmRoutePrimary \\
+ExpertPolicy & \TrafficExpertSuccessPrimary & \TrafficExpertCollisionPrimary &
+\TrafficExpertRoutePrimary \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+At density 0.05, adaptation changed success by \TrafficPrimaryGain{} and collision by
+\TrafficPrimaryCollisionChange{} relative to the frozen source. Traffic-free success and
+route completion changed by \TrafficFreeSuccessChange{} and \TrafficFreeRouteChange{};
+adapted success changed by \TrafficStressSuccessChange{} from density 0.05 to 0.10.
+Full seed-level values, Wilson intervals, uncertainty, and failure composition are
+generated from immutable evaluation CSVs.
+
+\IfFileExists{../runs/traffic_extension_success_collision.png}{
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{../runs/traffic_extension_success_collision.png}
+\caption{Held-out success and collision across traffic density.}
 \end{figure}
+}{}
+\else
+The traffic-adaptation runs have not yet been executed. No result is imputed from the
+geometry study or the earlier zero-shot stress test. Once the three declared runs and
+frozen evaluation matrix finish, the comparison script will generate this section's
+macros, tables, and plots directly from the saved episode files.
 \fi
 
-\section{Phase-2 Research Design}
-Phase 2 tests whether a structured curriculum improves procedural-road learning. Both
-conditions use Stable-Baselines3 SAC \cite{raffin2021sb3}, the same $[256,256]$ MLP,
-full $[-1,1]$ steering and throttle/brake actions, identical rewards, a maximum of 500,000
-environment steps, and the same final validation and test scenarios.
+\section{Failure Analysis and Retention}
+Three outcomes are scientifically useful. First, adaptation may reduce collision while
+preserving source performance, supporting the proposed transfer. Second, a policy may
+improve traffic success but lose traffic-free geometry competence, revealing catastrophic
+forgetting. Third, both reward variants may miss the gate; the predeclared selection still
+produces one confirmation and reports the miss honestly rather than expanding the search.
 
-\paragraph{Direct SAC.}
-The control is trained from scratch on 100 three-block procedural scenarios for the full
-budget or until the target validation gate is reached.
-
-\paragraph{Curriculum SAC.}
-The experimental policy begins on curved roads (\texttt{C}, at most 100,000 steps), then
-straight-plus-curve roads (\texttt{SC}, at most 150,000 steps), and finally uses all
-remaining steps on random three-block maps. Each prerequisite stage must reach 90\%
-success and route completion with at most 10\% collision, off-road, and timeout outcomes.
-Model parameters and the SAC replay buffer persist across stages. Curriculum learning has
-previously improved performance and sample efficiency across driving tasks of increasing
-road complexity \cite{ozturk2021curriculum}; this experiment tests the idea in MetaDrive
-under an equal total budget.
-
-One direct and one curriculum seed-0 pilot are run first. Confirmation seeds 1 and 2 are
-launched only if at least one pilot reaches 50\% success or 80\% route completion. A
-curriculum advantage is claimed only for an improvement of at least ten percentage points
-in success, or similar success with at least 20\% fewer combined collision and off-road
-outcomes, with a consistent direction across the confirmation seeds.
-
-\section{Phase-2 Results}
-Before learned-policy training, both native controllers solved all 25 fixed validation
-scenarios. IDM achieved 100\% success, 98.69\% mean route completion, and zero collision,
-off-road, or timeout outcomes; ExpertPolicy achieved 100\%, 98.69\%, and zero respectively.
-This establishes task feasibility, but it is not evidence that SAC has learned the task.
-
-\begin{table}[h]
-  \centering
-  \caption{Unseen three-block procedural-road test results. Learned conditions are means
-  across the two complete seed pairs (200 episodes per condition); native controllers use
-  one 100-episode deterministic evaluation each.}
-  \label{tab:phase2-results}
-  \begin{tabular}{lccccc}
-    \toprule
-    Condition & Success & Collision & Off-road & Timeout & Route completion \\
-    \midrule
-    IDM & 95.0\% & 0.0\% & 5.0\% & 0.0\% & 95.9\% \\
-    ExpertPolicy & 100.0\% & 0.0\% & 0.0\% & 0.0\% & 98.7\% \\
-    Direct SAC & \DirectSuccess & \DirectCollision & \DirectOffRoad &
-      \DirectTimeout & \DirectCompletion \\
-    Curriculum SAC & \CurriculumSuccess & \CurriculumCollision &
-      \CurriculumOffRoad & \CurriculumTimeout & \CurriculumCompletion \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-Strict fingerprints matched across direct and curriculum conditions for algorithm,
-architecture, action interface, reward, budget, map, and evaluation split. Curriculum
-increased success by 75 percentage points, reduced off-road incidence by 73.5 points, and
-increased mean route completion by 48.0 points. The direction was consistent in both
-complete pairs: seed 0 improved from 24\% to 86\% success and seed 1 from 0\% to 88\%.
-The curriculum aggregate passes the Phase-2 gate, although seed 0 alone retained a 14\%
-off-road rate. Failure flags are not mutually exclusive, so collision, off-road, and
-timeout percentages need not sum to 100\%.
-
-The native policies remain useful ceilings rather than learned-policy equivalents. On the
-same untouched 100 scenarios, IDM achieved 95\% success and ExpertPolicy 100\%. Curriculum
-SAC is therefore close to IDM on traffic-free geometry, but it has not surpassed the
-simulator's native controllers.
-
-Optimization was materially seed-sensitive. Curriculum seed 2 failed the mandatory curve
-prerequisite after 100,000 steps: its best validation checkpoint had 0\% success and
-41.75\% route completion. Direct seed 2 completed its budget but had 0\% test success,
-19.24\% route completion, and 100\% off-road incidence. These terminal results are kept
-rather than rerun selectively. Thus the 87\% headline is conditional on the two complete
-pairs, while curriculum produced a usable final procedural policy in two of three launches.
-
-Checkpoint behavior also rejects the idea that more training alone is the answer.
-Curriculum seed 0 passed the target gate after 150,000 total steps. Curriculum seed 1
-reached 92\% validation success at 375,000 steps, then fell to 36\% at 500,000; the saved
-best checkpoint still obtained 88\% on the untouched test. Direct seed 0 peaked at 40\%
-validation success at 150,000 steps, whereas direct seeds 1 and 2 converged to almost
-constant deterministic actions. Reliable checkpoint selection was therefore essential.
-
-\begin{table}[h]
-  \centering
-  \caption{Zero-shot test at traffic density 0.05, averaged across the same two frozen
-  learned-policy seeds (200 episodes per condition). Neither policy was trained with
-  traffic.}
-  \label{tab:phase2-traffic}
-  \begin{tabular}{lccccc}
-    \toprule
-    Condition & Success & Collision & Off-road & Timeout & Route completion \\
-    \midrule
-    Direct SAC & 3.5\% & 37.0\% & 67.5\% & 4.0\% & 37.3\% \\
-    Curriculum SAC & 69.0\% & 21.0\% & 6.0\% & 4.0\% & 87.1\% \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-The light-traffic result is encouraging transfer, not traffic competence. Curriculum SAC
-retained far more route-following ability than direct SAC, but a 21\% collision rate is
-not a safety result. Seed outcomes also varied substantially: curriculum seeds 0 and 1
-achieved 59\% and 79\% success, with 34\% and 8\% collision respectively. Traffic was a
-deliberate distribution shift, and the default state observation already contains lidar
-information about surrounding vehicles \cite{li2022metadrive}; the missing ingredient is
-traffic-conditioned learning rather than a new image pipeline.
-
-\begin{figure}[h]
-  \centering
-  \IfFileExists{../runs/phase2_comparison.png}{
-    \includegraphics[width=0.92\linewidth]{../runs/phase2_comparison.png}
-  }{
-    \includegraphics[width=0.92\linewidth]{runs/phase2_comparison.png}
-  }
-  \caption{Strictly compatible direct-versus-curriculum SAC results on unseen procedural
-  roads.}
-\end{figure}
+The video set uses declared scenario rules. A matched before/after pair uses the same
+lowest held-out seed. Representative success and diagnostic failure videos use the lowest
+seed satisfying that outcome in the evaluation CSV. The public default is a moving
+1280-by-720 chase view; top-down rendering remains diagnostic only.
 
 \section{Limitations}
-Phase 1 used one training seed per algorithm and a task that admitted an open-loop
-solution. Phase 2 remains state-vector based, traffic-free during training, and limited to
-one simulator and two SAC training conditions. One hundred test episodes quantify
-episode-level uncertainty, but two complete paired training seeds are too few for a broad
-statistical claim. The failed third curriculum launch is a real availability limitation,
-not missing data. Validation selected the best checkpoint, and the test set was not used
-for that choice, but the aggregate is still conditional on completing the curriculum.
-The zero-shot traffic test measures robustness but does not establish traffic competence
-or safety. Finally, the two current top-down videos are technically valid 800-by-800
-recordings of a fixed successful seed-30000 episode; they demonstrate behavior but are not
-representative samples, especially for direct SAC.
+Two training seeds cannot characterize optimizer variance. Traffic density is simulator
+specific, and built-in traffic policies are not a proxy for human behavior. Procedural
+maps remain short, observations are privileged low-dimensional simulator state, and
+validation participates in checkpoint and variant selection. Wilson intervals describe
+episode sampling uncertainty, not uncertainty across training runs. Most importantly,
+collision reduction in MetaDrive is not evidence of real-world autonomous-driving safety.
 
-\section{Bounded Final Extension}
-The original MVP and the Phase-2 geometry question are complete. The only remaining
-extension justified by the evidence is traffic adaptation: can a geometry-competent
-curriculum policy be fine-tuned on modest traffic while retaining its traffic-free
-generalization? This is a final demonstration, not a new algorithm search.
-
-The experiment is deliberately capped at two long runs. The best curriculum checkpoints
-from seeds 0 and 1 are each continued for at most 250,000 steps on the same three-block
-procedural distribution, first at traffic density 0.02 and then at 0.05. Observation,
-action interface, SAC architecture, reward, map complexity, and scenario split remain
-fixed; only exposure to traffic changes. Direct-from-scratch training, new algorithms,
-larger maps, image policies, and safe-RL objectives are excluded so that the result has one
-interpretation.
-
-Before training, IDM must establish that the exact held-out traffic tasks at densities
-0.05 and 0.10 are solvable. Frozen pre- and post-adaptation policies are then compared on
-the same 100 unseen scenarios at densities 0, 0.05, and 0.10. The primary density-0.05
-gate, averaged across both seeds, is at least 80\% success and 90\% route completion with
-no more than 10\% collision or off-road incidence. Traffic adaptation must also improve
-success or collision by at least ten percentage points relative to the frozen zero-shot
-policy, while traffic-free success may fall by no more than ten points. Density 0.10 is a
-descriptive stress test, not a tuning target.
-
-Reporting will include all two-seed outcomes whether favorable or not. The final visual
-set will contain the existing traffic-free curriculum rollout and a matched traffic
-failure/success pair on the same held-out scenario before and after adaptation. A
-systematically selected failure case must be labeled as diagnostic rather than
-representative. After these two training runs and frozen evaluations, the project stops;
-SafeMetaDrive, multi-agent RL, real-data replay, and further seed or hyperparameter sweeps
-remain future work.
-
+\balance
 \section{Conclusion}
-Phase 1 converted an initially unreliable experiment into a reproducible control gate and
-showed why headline success alone is insufficient: action behavior revealed that PPO's
-perfect score was trivial, whereas SAC learned a responsive controller. Phase 2 returns to
-the project's original procedural-generalization objective through one controlled
-direct-versus-curriculum experiment. Its answer is positive but bounded: curriculum SAC
-raised held-out success from 12\% to 87\% across the two complete pairs and approached the
-IDM baseline on unseen traffic-free maps. The failed third curriculum launch and the 21\%
-zero-shot traffic collision rate prevent a stronger reliability or safety claim. One
-two-run traffic-adaptation extension is sufficient to turn that limitation into the
-project's final experiment; beyond it, additional breadth would dilute rather than
-strengthen the portfolio story.
+SafeRL-Drive first established trustworthy artifacts, then showed that geometry curriculum
+can materially improve procedural-road generalization. The zero-shot traffic failure
+provides a concrete final question rather than an excuse for an open-ended experiment
+sweep. The fixed three-run extension tests warm-start traffic exposure, one controlled
+reward ablation, retention, and stress degradation. Its value lies in the bounded design
+and auditable result, whether the final answer is positive or negative.
 
 \bibliographystyle{plain}
 \bibliography{references}
-
 \end{document}

@@ -1,8 +1,10 @@
 """General, logging, artifact, and plotting utilities."""
 
 import importlib.metadata
+import hashlib
 import json
 import logging
+import os
 import platform
 import random
 import subprocess
@@ -146,14 +148,26 @@ def log_system_info(logger, run_dir=None):
     """Log reproducibility details and return them for run metadata."""
     cuda_available = False
     gpu_name = "none"
+    gpu_memory_bytes = 0
     try:
         import torch
 
         cuda_available = bool(torch.cuda.is_available())
         if cuda_available:
             gpu_name = torch.cuda.get_device_name(0)
+            gpu_memory_bytes = int(torch.cuda.get_device_properties(0).total_memory)
     except Exception:
         gpu_name = "PyTorch unavailable"
+
+    try:
+        import psutil
+
+        memory = psutil.virtual_memory()
+        ram_total_bytes = int(memory.total)
+        ram_available_bytes = int(memory.available)
+    except Exception:
+        ram_total_bytes = None
+        ram_available_bytes = None
 
     info = {
         "timestamp_utc": utc_timestamp(),
@@ -161,8 +175,12 @@ def log_system_info(logger, run_dir=None):
         "python": sys.version.replace("\n", " "),
         "platform": platform.platform(),
         "git_commit": _git_commit(),
+        "cpu_count": os.cpu_count(),
+        "ram_total_bytes": ram_total_bytes,
+        "ram_available_bytes": ram_available_bytes,
         "cuda_available": cuda_available,
         "gpu_name": gpu_name,
+        "gpu_memory_bytes": gpu_memory_bytes,
         "packages": _package_versions(),
     }
     if run_dir is not None:
@@ -219,7 +237,8 @@ def json_text(data):
 def write_json(data, path):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as file:
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with temporary.open("w", encoding="utf-8") as file:
         json.dump(
             _json_ready(data),
             file,
@@ -228,6 +247,9 @@ def write_json(data, path):
             default=_json_default,
         )
         file.write("\n")
+        file.flush()
+        os.fsync(file.fileno())
+    temporary.replace(path)
     return path
 
 
@@ -248,8 +270,50 @@ def update_latest_run_file(output_dir, algo_or_name, run_dir):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     pointer = output_dir / f"latest_{algo_or_name}.txt"
-    pointer.write_text(f"{_portable_path(run_dir)}\n", encoding="utf-8")
+    temporary = pointer.with_name(f".{pointer.name}.{os.getpid()}.tmp")
+    temporary.write_text(f"{_portable_path(run_dir)}\n", encoding="utf-8")
+    temporary.replace(pointer)
     return pointer
+
+
+def sha256_file(path, chunk_size=1024 * 1024):
+    """Return a stable SHA-256 hash without loading a checkpoint into memory."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as file:
+        while True:
+            chunk = file.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def model_space_diagnostics(model, environment, env_config):
+    """Describe the policy interface and parameter counts at startup."""
+    observation_space = environment.observation_space
+    action_space = environment.action_space
+
+    def parameter_count(module):
+        if module is None:
+            return 0
+        return sum(parameter.numel() for parameter in module.parameters())
+
+    policy = getattr(model, "policy", None)
+    actor = getattr(model, "actor", None)
+    critic = getattr(model, "critic", None)
+    vehicle_config = env_config.get("vehicle_config", {})
+    lidar_config = vehicle_config.get("lidar", {})
+    lidar_beams = lidar_config.get("num_lasers", 240)
+    return {
+        "observation_shape": list(getattr(observation_space, "shape", ()) or ()),
+        "action_shape": list(getattr(action_space, "shape", ()) or ()),
+        "observation_dtype": str(getattr(observation_space, "dtype", "unknown")),
+        "action_dtype": str(getattr(action_space, "dtype", "unknown")),
+        "lidar_beams": int(lidar_beams),
+        "policy_parameters": parameter_count(policy),
+        "actor_parameters": parameter_count(actor),
+        "critic_parameters": parameter_count(critic),
+    }
 
 
 def read_latest_run(output_dir, algo_or_name):
