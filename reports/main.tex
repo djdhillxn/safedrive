@@ -25,14 +25,16 @@
 \newcommand{\SacCompletion}{95.7\%}
 \newcommand{\IdmCompletion}{95.6\%}
 
-\newcommand{\DirectSuccess}{Pending}
-\newcommand{\CurriculumSuccess}{Pending}
-\newcommand{\DirectCollision}{Pending}
-\newcommand{\CurriculumCollision}{Pending}
-\newcommand{\DirectOffRoad}{Pending}
-\newcommand{\CurriculumOffRoad}{Pending}
-\newcommand{\DirectCompletion}{Pending}
-\newcommand{\CurriculumCompletion}{Pending}
+\newcommand{\DirectSuccess}{12.0\%}
+\newcommand{\CurriculumSuccess}{87.0\%}
+\newcommand{\DirectCollision}{15.5\%}
+\newcommand{\CurriculumCollision}{0.0\%}
+\newcommand{\DirectOffRoad}{83.0\%}
+\newcommand{\CurriculumOffRoad}{9.5\%}
+\newcommand{\DirectTimeout}{5.0\%}
+\newcommand{\CurriculumTimeout}{3.5\%}
+\newcommand{\DirectCompletion}{47.0\%}
+\newcommand{\CurriculumCompletion}{95.1\%}
 
 \newif\ifphaseoneresults
 \newif\ifphasetworesults
@@ -62,7 +64,14 @@ traffic-free straight road. Frozen PPO and SAC policies each achieved 100\% succ
 held-out episodes, although action analysis showed that PPO solved this simple task with a
 constant open-loop command while SAC learned state-dependent continuous control. Phase 2
 therefore focuses on SAC and asks whether a staged road-geometry curriculum improves
-generalization to unseen three-block procedural maps over equal-budget direct training.
+generalization to unseen three-block procedural maps under the same maximum budget as
+direct training.
+Across two complete, fingerprint-compatible seed pairs, curriculum SAC achieved 87\%
+held-out success against 12\% for direct SAC, while raising route completion from 47.0\%
+to 95.1\%. A zero-shot light-traffic test then exposed the remaining limitation:
+curriculum SAC retained 69\% success but collided in 21\% of episodes. The project has
+therefore answered its geometry-curriculum question; one bounded traffic-adaptation study
+is proposed as the final portfolio extension.
 Resolved configurations, strict experiment fingerprints, logs, per-episode metrics,
 plots, videos, and Google Drive artifacts make each claim auditable.
 \end{abstract}
@@ -188,21 +197,76 @@ This establishes task feasibility, but it is not evidence that SAC has learned t
 
 \begin{table}[h]
   \centering
-  \caption{Unseen three-block procedural-road results, averaged across completed training
-  seeds. Values remain pending until the strict fingerprint-checked comparison runs.}
+  \caption{Unseen three-block procedural-road test results. Learned conditions are means
+  across the two complete seed pairs (200 episodes per condition); native controllers use
+  one 100-episode deterministic evaluation each.}
   \label{tab:phase2-results}
-  \begin{tabular}{lcccc}
+  \begin{tabular}{lccccc}
     \toprule
-    Condition & Success & Collision & Off-road & Route completion \\
+    Condition & Success & Collision & Off-road & Timeout & Route completion \\
     \midrule
-    Direct SAC & \DirectSuccess & \DirectCollision & \DirectOffRoad & \DirectCompletion \\
+    IDM & 95.0\% & 0.0\% & 5.0\% & 0.0\% & 95.9\% \\
+    ExpertPolicy & 100.0\% & 0.0\% & 0.0\% & 0.0\% & 98.7\% \\
+    Direct SAC & \DirectSuccess & \DirectCollision & \DirectOffRoad &
+      \DirectTimeout & \DirectCompletion \\
     Curriculum SAC & \CurriculumSuccess & \CurriculumCollision &
-      \CurriculumOffRoad & \CurriculumCompletion \\
+      \CurriculumOffRoad & \CurriculumTimeout & \CurriculumCompletion \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-\ifphasetworesults
+Strict fingerprints matched across direct and curriculum conditions for algorithm,
+architecture, action interface, reward, budget, map, and evaluation split. Curriculum
+increased success by 75 percentage points, reduced off-road incidence by 73.5 points, and
+increased mean route completion by 48.0 points. The direction was consistent in both
+complete pairs: seed 0 improved from 24\% to 86\% success and seed 1 from 0\% to 88\%.
+The curriculum aggregate passes the Phase-2 gate, although seed 0 alone retained a 14\%
+off-road rate. Failure flags are not mutually exclusive, so collision, off-road, and
+timeout percentages need not sum to 100\%.
+
+The native policies remain useful ceilings rather than learned-policy equivalents. On the
+same untouched 100 scenarios, IDM achieved 95\% success and ExpertPolicy 100\%. Curriculum
+SAC is therefore close to IDM on traffic-free geometry, but it has not surpassed the
+simulator's native controllers.
+
+Optimization was materially seed-sensitive. Curriculum seed 2 failed the mandatory curve
+prerequisite after 100,000 steps: its best validation checkpoint had 0\% success and
+41.75\% route completion. Direct seed 2 completed its budget but had 0\% test success,
+19.24\% route completion, and 100\% off-road incidence. These terminal results are kept
+rather than rerun selectively. Thus the 87\% headline is conditional on the two complete
+pairs, while curriculum produced a usable final procedural policy in two of three launches.
+
+Checkpoint behavior also rejects the idea that more training alone is the answer.
+Curriculum seed 0 passed the target gate after 150,000 total steps. Curriculum seed 1
+reached 92\% validation success at 375,000 steps, then fell to 36\% at 500,000; the saved
+best checkpoint still obtained 88\% on the untouched test. Direct seed 0 peaked at 40\%
+validation success at 150,000 steps, whereas direct seeds 1 and 2 converged to almost
+constant deterministic actions. Reliable checkpoint selection was therefore essential.
+
+\begin{table}[h]
+  \centering
+  \caption{Zero-shot test at traffic density 0.05, averaged across the same two frozen
+  learned-policy seeds (200 episodes per condition). Neither policy was trained with
+  traffic.}
+  \label{tab:phase2-traffic}
+  \begin{tabular}{lccccc}
+    \toprule
+    Condition & Success & Collision & Off-road & Timeout & Route completion \\
+    \midrule
+    Direct SAC & 3.5\% & 37.0\% & 67.5\% & 4.0\% & 37.3\% \\
+    Curriculum SAC & 69.0\% & 21.0\% & 6.0\% & 4.0\% & 87.1\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The light-traffic result is encouraging transfer, not traffic competence. Curriculum SAC
+retained far more route-following ability than direct SAC, but a 21\% collision rate is
+not a safety result. Seed outcomes also varied substantially: curriculum seeds 0 and 1
+achieved 59\% and 79\% success, with 34\% and 8\% collision respectively. Traffic was a
+deliberate distribution shift, and the default state observation already contains lidar
+information about surrounding vehicles \cite{li2022metadrive}; the missing ingredient is
+traffic-conditioned learning rather than a new image pipeline.
+
 \begin{figure}[h]
   \centering
   \IfFileExists{../runs/phase2_comparison.png}{
@@ -213,24 +277,63 @@ This establishes task feasibility, but it is not evidence that SAC has learned t
   \caption{Strictly compatible direct-versus-curriculum SAC results on unseen procedural
   roads.}
 \end{figure}
-\fi
 
 \section{Limitations}
 Phase 1 used one training seed per algorithm and a task that admitted an open-loop
 solution. Phase 2 remains state-vector based, traffic-free during training, and limited to
 one simulator and two SAC training conditions. One hundred test episodes quantify
-episode-level uncertainty, while up to three training seeds provide only a small estimate
-of optimization variability. The zero-shot traffic test measures robustness but does not
-establish traffic competence or safety.
+episode-level uncertainty, but two complete paired training seeds are too few for a broad
+statistical claim. The failed third curriculum launch is a real availability limitation,
+not missing data. Validation selected the best checkpoint, and the test set was not used
+for that choice, but the aggregate is still conditional on completing the curriculum.
+The zero-shot traffic test measures robustness but does not establish traffic competence
+or safety. Finally, the two current top-down videos are technically valid 800-by-800
+recordings of a fixed successful seed-30000 episode; they demonstrate behavior but are not
+representative samples, especially for direct SAC.
+
+\section{Bounded Final Extension}
+The original MVP and the Phase-2 geometry question are complete. The only remaining
+extension justified by the evidence is traffic adaptation: can a geometry-competent
+curriculum policy be fine-tuned on modest traffic while retaining its traffic-free
+generalization? This is a final demonstration, not a new algorithm search.
+
+The experiment is deliberately capped at two long runs. The best curriculum checkpoints
+from seeds 0 and 1 are each continued for at most 250,000 steps on the same three-block
+procedural distribution, first at traffic density 0.02 and then at 0.05. Observation,
+action interface, SAC architecture, reward, map complexity, and scenario split remain
+fixed; only exposure to traffic changes. Direct-from-scratch training, new algorithms,
+larger maps, image policies, and safe-RL objectives are excluded so that the result has one
+interpretation.
+
+Before training, IDM must establish that the exact held-out traffic tasks at densities
+0.05 and 0.10 are solvable. Frozen pre- and post-adaptation policies are then compared on
+the same 100 unseen scenarios at densities 0, 0.05, and 0.10. The primary density-0.05
+gate, averaged across both seeds, is at least 80\% success and 90\% route completion with
+no more than 10\% collision or off-road incidence. Traffic adaptation must also improve
+success or collision by at least ten percentage points relative to the frozen zero-shot
+policy, while traffic-free success may fall by no more than ten points. Density 0.10 is a
+descriptive stress test, not a tuning target.
+
+Reporting will include all two-seed outcomes whether favorable or not. The final visual
+set will contain the existing traffic-free curriculum rollout and a matched traffic
+failure/success pair on the same held-out scenario before and after adaptation. A
+systematically selected failure case must be labeled as diagnostic rather than
+representative. After these two training runs and frozen evaluations, the project stops;
+SafeMetaDrive, multi-agent RL, real-data replay, and further seed or hyperparameter sweeps
+remain future work.
 
 \section{Conclusion}
 Phase 1 converted an initially unreliable experiment into a reproducible control gate and
 showed why headline success alone is insufficient: action behavior revealed that PPO's
 perfect score was trivial, whereas SAC learned a responsive controller. Phase 2 returns to
 the project's original procedural-generalization objective through one controlled
-direct-versus-curriculum experiment. The result will be useful whether positive or
-negative because the task, budget, splits, fingerprints, and stopping rules are fixed in
-advance.
+direct-versus-curriculum experiment. Its answer is positive but bounded: curriculum SAC
+raised held-out success from 12\% to 87\% across the two complete pairs and approached the
+IDM baseline on unseen traffic-free maps. The failed third curriculum launch and the 21\%
+zero-shot traffic collision rate prevent a stronger reliability or safety claim. One
+two-run traffic-adaptation extension is sufficient to turn that limitation into the
+project's final experiment; beyond it, additional breadth would dilute rather than
+strengthen the portfolio story.
 
 \bibliographystyle{plain}
 \bibliography{references}

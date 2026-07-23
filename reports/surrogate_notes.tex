@@ -5,7 +5,7 @@
 \usepackage[hidelinks]{hyperref}
 \emergencystretch=2em
 
-\title{SafeRL-Drive Phase-1 Surrogate Notes}
+\title{SafeRL-Drive Experiment Surrogate Notes}
 \author{Dheeraj Dhillon}
 \date{\today}
 
@@ -535,9 +535,205 @@ had 0\% success and 41.75\% mean route completion. It is therefore not a resumab
 run and is excluded from paired comparisons. The saved result remains useful evidence of
 training-seed variability; it must not be replaced merely to obtain a favorable third pair.
 
-Traffic training, SafeMetaDrive obstacles, vehicle-dynamics randomization, image policies,
-real-world replay, and multi-agent experiments remain deferred. If Phase 2 succeeds, the
-next coherent extension is explicit obstacle/cost learning in SafeMetaDrive rather than
-another broad algorithm sweep.
+\section{Phase-2 final audit and interpretation}
+The strict comparison completed on July 22 at 16:10 UTC. Direct and curriculum SAC had
+matching strict fingerprints, the two native controllers matched the learned-policy task
+fingerprint, and the light-traffic summaries matched each other under their separate
+strict fingerprint. The complete direct--curriculum seed pairs are 0 and 1. Seed 2 is not
+a pair: direct SAC completed, whereas curriculum SAC failed its required curve gate and
+correctly stopped.
+
+\begin{center}
+\begin{tabular}{lrrrrr}
+  \toprule
+  Condition & Success & Collision & Off-road & Timeout & Route \\
+  \midrule
+  Direct SAC seed 0 & 24\% & 14\% & 66\% & 10\% & 66.05\% \\
+  Curriculum SAC seed 0 & 86\% & 0\% & 14\% & 0\% & 94.42\% \\
+  Direct SAC seed 1 & 0\% & 17\% & 100\% & 0\% & 27.98\% \\
+  Curriculum SAC seed 1 & 88\% & 0\% & 5\% & 7\% & 95.71\% \\
+  \midrule
+  Direct SAC mean & 12\% & 15.5\% & 83\% & 5\% & 47.01\% \\
+  Curriculum SAC mean & 87\% & 0\% & 9.5\% & 3.5\% & 95.06\% \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+Each learned-policy row is a frozen 100-episode test beginning at seed 30000. Across the
+two complete pairs, curriculum improves success by 75 percentage points, route completion
+by 48.05 points, and off-road incidence by 73.5 points. The direction is consistent in
+both pairs and exceeds the predeclared 10-point claim threshold. The curriculum aggregate
+also passes the Phase-2 target of at least 80\% success and 90\% route completion with no
+failure rate above 10\%. Seed 0 by itself misses the off-road threshold at 14\%, so the
+claim must remain an aggregate one. Event flags can overlap within an episode; failure
+percentages are not a partition and are not expected to sum to 100\%.
+
+Exact-task native-controller testing on the same 100 seeds produced 95\% success, 95.94\%
+route completion, and 5\% off-road for IDM, and 100\% success, 98.66\% route completion,
+and no failures for ExpertPolicy. Curriculum SAC is therefore a credible learned
+procedural controller and is close to IDM, but it does not outperform the native ceiling.
+
+The third launches are important negative evidence. Direct seed 2 used all 500,000 steps
+and selected its 350,000-step checkpoint, yet test success was 0\%, route completion was
+19.24\%, and every episode went off road. Its deterministic steering and action-change
+statistics were effectively constant. Curriculum seed 2 stopped after 100,000 curve steps
+because its best checkpoint reached 0\% success, 41.75\% route completion, and 100\%
+off-road incidence. It did not earn access to later stages. The paired 87\% result is thus
+conditional on the two completed curricula, and the procedural-policy availability rate
+is two of three launches. Seed 2 must not be restarted merely to manufacture a complete
+favorable pair.
+
+The validation histories show pronounced non-monotonicity. Direct seed 0 selected 150,000
+steps (40\% validation success and 72.51\% route completion); later checkpoints did not
+improve it. Direct seeds 1 and 2 never achieved validation success. Curriculum seed 0
+passed curve at 100,000 steps, straight-plus-curve at 125,000, and the procedural target
+at 150,000, saving 350,000 steps. Curriculum seed 1 found its best procedural checkpoint
+at 375,000 steps with 92\% validation success and 98.27\% route completion, then degraded
+to 36\% success and 69.43\% route completion at 500,000. Testing the saved best checkpoint
+produced 88\% success. The correct lesson is to preserve validation-selected checkpoints,
+not to train longer by default.
+
+Training-return plots are compatible with this diagnosis. The curriculum plots include
+stage-boundary distribution changes and therefore should not be read as a single stationary
+learning curve. Direct seed 1's sampled training returns increased while its deterministic
+validation action collapsed to nearly fixed steering and throttle. Training return alone
+would have hidden the failure; deterministic held-out outcomes and action diagnostics are
+necessary.
+
+The saved notebook contains one historical traceback in its seed-0 comparison output:
+\texttt{DIRECT\_SEED0\_SUMMARY} was undefined in that earlier kernel. The current cell
+source begins with \texttt{restore\_phase2\_session\_state()}, and later cells restored all
+six statuses, generated the final comparison, evaluated light traffic, and recorded videos
+successfully. The displayed traceback is stale execution history, not an unresolved code
+failure. It can be labeled or cleared for a presentation copy without rerunning training.
+
+\subsection{Zero-shot traffic stress test}
+The frozen traffic-free policies were evaluated for 100 episodes per seed at traffic
+density 0.05.
+
+\begin{center}
+\begin{tabular}{lrrrrr}
+  \toprule
+  Condition & Success & Collision & Off-road & Timeout & Route \\
+  \midrule
+  Direct SAC seed 0 & 7\% & 46\% & 44\% & 8\% & 47.87\% \\
+  Curriculum SAC seed 0 & 59\% & 34\% & 7\% & 0\% & 83.14\% \\
+  Direct SAC seed 1 & 0\% & 28\% & 91\% & 0\% & 26.72\% \\
+  Curriculum SAC seed 1 & 79\% & 8\% & 5\% & 8\% & 91.06\% \\
+  \midrule
+  Direct SAC mean & 3.5\% & 37\% & 67.5\% & 4\% & 37.29\% \\
+  Curriculum SAC mean & 69\% & 21\% & 6\% & 4\% & 87.10\% \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+Curriculum transfers much better than direct training even under distribution shift, but
+69\% success with 21\% collisions is not traffic competence and must never be described as
+safe driving. Seed 1 is already near the target while seed 0 collides frequently, showing
+that traffic robustness is also seed-sensitive. Because training contained no vehicles,
+the gap is expected rather than evidence of a broken observation: MetaDrive's default
+state observation includes lidar returns for surrounding objects. This is the one result
+that justifies further work.
+
+\subsection{Video audit}
+The Phase-2 recorder completed without a rendering exception. It produced H.264 top-down
+videos at $800\times800$, 20 frames per second: 262 frames for direct seed 0 and 332 frames
+for curriculum seed 0. Both sidecar files report a successful deterministic seed-30000
+episode with roughly 99\% route completion, and inspected middle frames show the ego car
+following a curved procedural lane correctly.
+
+These videos are valid but selected: seed 30000 is a success for both policies, while
+direct SAC succeeds in only 12\% of the paired aggregate. The direct video cannot stand
+alone as evidence of typical performance. The final portfolio should show aggregate plots
+and label any selected success or failure rollout explicitly. There is no reason to render
+every seed or every training condition.
+
+\section{Project alignment and closure decision}
+The original request was a compact student MVP: reproducible PPO and SAC training,
+evaluation on unseen procedural scenarios, an IDM baseline, plots, videos, and a report.
+It explicitly rejected a large algorithm suite, image policies, real-data replay,
+multi-agent learning, and seed sweeps. Phase 1 closed the infrastructure and basic-control
+requirements. Phase 2 went beyond the one-run original scope, but it did so to answer one
+coherent question and now supplies the project's strongest result: staged geometry
+curriculum changes SAC from an unreliable direct learner into a controller that succeeds
+on 87\% of unseen procedural routes across the two complete pairs.
+
+The project is already defensible as a completed portfolio study. A truthful two-bullet
+summary could say that the project built a restart-safe, fingerprinted MetaDrive/SB3
+pipeline with held-out evaluation and Drive artifact recovery, and that a staged SAC
+curriculum improved unseen three-block-map success from 12\% to 87\% while exposing a
+21\% zero-shot traffic collision rate. The second number is not an embarrassment; it is a
+well-measured limitation that motivates exactly one final experiment.
+
+Creating a broad Phase 3 with new maps, algorithms, sensors, and safety methods would
+repeat the project's earlier loss of focus. The repository also should not be aggressively
+refactored before the final runs. Phase-1 and Phase-2 reproducibility is evidence, and
+breaking it provides no portfolio value. Freeze the validated paths, implement the final
+experiment with the smallest extension possible, then remove proven redundancy only after
+the final artifacts exist.
+
+\section{Frozen final-demonstration plan}
+The final research question is: \emph{Can modest traffic-aware fine-tuning reduce the
+collision gap of geometry-competent curriculum SAC without destroying its traffic-free
+generalization?} It will be called the final demonstration, or Phase 3 only for notebook
+bookkeeping. It is not an invitation to add more phases.
+
+\subsection{Experimental matrix}
+There are two long training jobs, no more:
+\begin{enumerate}
+  \item continue the best Phase-2 curriculum seed-0 checkpoint for at most 250,000 steps;
+  \item continue the best Phase-2 curriculum seed-1 checkpoint for at most 250,000 steps.
+\end{enumerate}
+Each job keeps the three-block procedural map, vector/lidar observation, continuous action
+interface, $[256,256]$ SAC network, reward, horizon, and scenario-count design. Traffic is
+the sole manipulated dimension: begin at density 0.02, then train at the target density
+0.05. The best model is selected only on a disjoint traffic validation split. Policy
+weights transfer; a new replay buffer avoids mixing obsolete traffic-free transitions
+with the traffic objective. No direct-from-scratch comparator is needed because the claim
+is traffic adaptation relative to the already measured frozen zero-shot policy, not that
+transfer is superior to every alternative.
+
+Before either long run, deterministic IDM evaluations at densities 0.05 and 0.10 must
+confirm exact-task solvability. These are cheap checks, not additional learned experiments.
+After training, the frozen pre-adaptation and post-adaptation policies are evaluated on the
+same 100 held-out scenario seeds at densities 0, 0.05, and 0.10. Density 0.05 is primary;
+density 0 measures retention and density 0.10 is a descriptive stress test. Traffic must
+be reproducible under the scenario seed, and its complete configuration belongs in the
+fingerprint.
+
+The aggregate density-0.05 acceptance gate across the two seeds is:
+\begin{itemize}
+  \item success at least 80\% and route completion at least 90\%;
+  \item collision and off-road incidence each at most 10\%;
+  \item at least a ten-point improvement in success or collision relative to the frozen
+        zero-shot curriculum aggregate;
+  \item traffic-free success remains at least 80\% and falls by no more than ten points.
+\end{itemize}
+Both seed rows are reported even if only the aggregate passes. Density-0.10 has no gate
+and must not be used for checkpoint selection. Once the two jobs and frozen evaluations
+finish, the experimental work stops whether the result is positive or negative.
+
+The final visual package is intentionally small:
+\begin{enumerate}
+  \item the existing successful traffic-free curriculum rollout as the geometry result;
+  \item a matched before/after traffic pair on the same held-out seed where the frozen
+        policy fails and IDM establishes solvability;
+  \item one aggregate figure covering traffic-free retention, target traffic, and stress
+        traffic, with per-seed markers visible.
+\end{enumerate}
+The matched failure seed is diagnostic and must be labeled as such. It should be selected
+by a written rule, such as the first held-out seed where frozen curriculum collides and IDM
+succeeds, rather than by visual appeal.
+
+On the observed Colab L4 timing, a 500,000-step SAC job took roughly 100--110 minutes.
+The two capped 250,000-step continuations should therefore require roughly 45--75 minutes
+each, or about two GPU hours total, with another 30--60 minutes for all evaluations,
+fingerprint checks, plots, Drive sync, and videos. The conservative promise to the user is
+two long training-cell executions, never ten or fifteen.
+
+SafeMetaDrive obstacles and constrained safe-RL algorithms would be a legitimate future
+research project, as would multi-agent negotiation, image policies, vehicle-dynamics
+randomization, and real-world replay. None is required to close this project. Their role
+in the final report is a short future-work paragraph, not another notebook.
 
 \end{document}
