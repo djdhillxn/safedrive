@@ -328,9 +328,14 @@ The pinned macOS offscreen path also requires leaving MetaDrive's unused mouse f
 enabled so `MainCamera` does not call a window-only method on a graphics buffer; all
 visible interface panels remain hidden.
 
+On Linux without a `DISPLAY`, including a standard Colab runtime, the recorder selects
+Panda3D's `p3headlessgl` display pipe before MetaDrive is imported. That pipe renders
+through EGL without requiring an X server. Linux hosts with a display and macOS retain
+Panda3D's platform-default pipe.
+
 The pinned API is `main_camera.perceive(to_float=False)`. Expected frames are
 1280×720 RGB. Failure does not silently fall back to top-down; diagnostics include render
-mode, sensors, version, commit, and frame shape.
+mode, sensors, display pipe, window type, version, commit, and frame shape.
 
 Scenario selection is systematic: the lowest seed satisfying `first`, `first_success`,
 or `first_failure`. Sidecar JSON records model, seed, density, traffic mode, outcome,

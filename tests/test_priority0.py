@@ -39,7 +39,11 @@ from scripts.compare_runs import (
     select_traffic_pilot,
 )
 from scripts.evaluate import _condition_config
-from scripts.record_video import _raw_render_environment, select_video_scenario
+from scripts.record_video import (
+    _headless_display_backend,
+    _raw_render_environment,
+    select_video_scenario,
+)
 from scripts.train_curriculum import (
     _promote_failed_gate_model,
     _spaces_match,
@@ -755,6 +759,13 @@ def test_video_scenario_selection_is_systematic(tmp_path):
     assert select_video_scenario(path, "first") == 60000
     assert select_video_scenario(path, "first_success") == 60001
     assert select_video_scenario(path, "first_failure") == 60000
+
+
+def test_chase_uses_egl_only_on_displayless_linux():
+    assert _headless_display_backend("chase", "linux", "") == "p3headlessgl"
+    assert _headless_display_backend("chase", "linux", ":0") is None
+    assert _headless_display_backend("topdown", "linux", "") is None
+    assert _headless_display_backend("chase", "darwin", "") is None
 
 
 def test_checkpoint_selection_prioritizes_success_then_route_completion():

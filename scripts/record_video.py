@@ -2,6 +2,8 @@
 
 import argparse
 import importlib.metadata
+import os
+import sys
 from pathlib import Path
 
 import imageio.v2 as imageio
@@ -99,6 +101,31 @@ def select_video_scenario(episodes_csv, rule):
     return int(selected.sort_values(["env_seed", "episode"]).iloc[0]["env_seed"])
 
 
+def _headless_display_backend(view, platform_name=None, display=None):
+    """Use Panda3D's EGL pipe for chase rendering on display-less Linux hosts."""
+    platform_name = platform_name or sys.platform
+    if display is None:
+        display = os.environ.get("DISPLAY")
+    if view == "chase" and platform_name.startswith("linux") and not display:
+        return "p3headlessgl"
+    return None
+
+
+def _configure_chase_display(view, logger):
+    backend = _headless_display_backend(view)
+    if backend is None:
+        logger.debug("Using Panda3D's platform-default display backend.")
+        return "platform_default"
+
+    # This must run before MetaDrive imports ShowBase and creates its global
+    # engine. p3headlessgl uses EGL directly and does not require an X server.
+    from panda3d.core import loadPrcFileData
+
+    loadPrcFileData("safedrive-headless", f"load-display {backend}")
+    logger.info("Configured Panda3D headless display backend: %s.", backend)
+    return backend
+
+
 def _camera_config(config, args, video_seed):
     environment_config = make_eval_metadrive_config(config, "test")
     environment_config.update(
@@ -141,6 +168,10 @@ def _chase_frame(render_environment, expected_shape):
     camera = getattr(render_environment, "main_camera", None)
     engine = getattr(render_environment, "engine", None)
     sensor_names = sorted(getattr(engine, "sensors", {}).keys()) if engine else []
+    pipe = getattr(engine, "pipe", None) if engine else None
+    pipe_name = pipe.__class__.__name__ if pipe is not None else None
+    window = getattr(engine, "win", None) if engine else None
+    window_name = window.__class__.__name__ if window is not None else None
     render_mode = render_environment.config.get("_render_mode")
     try:
         version = importlib.metadata.version("metadrive-simulator")
@@ -150,7 +181,7 @@ def _chase_frame(render_environment, expected_shape):
         raise RuntimeError(
             "MetaDrive main camera was not created. "
             f"offscreen_mode={render_mode!r}, sensors={sensor_names}, version={version}, "
-            f"pinned_commit={PINNED_METADRIVE_COMMIT}."
+            f"pipe={pipe_name}, window={window_name}, pinned_commit={PINNED_METADRIVE_COMMIT}."
         )
     try:
         frame = _to_uint8_frame(camera.perceive(to_float=False))
@@ -158,13 +189,14 @@ def _chase_frame(render_environment, expected_shape):
         raise RuntimeError(
             "MetaDrive main-camera frame capture failed. "
             f"offscreen_mode={render_mode!r}, sensors={sensor_names}, version={version}, "
-            f"pinned_commit={PINNED_METADRIVE_COMMIT}."
+            f"pipe={pipe_name}, window={window_name}, pinned_commit={PINNED_METADRIVE_COMMIT}."
         ) from error
     if tuple(frame.shape) != tuple(expected_shape):
         raise RuntimeError(
             "MetaDrive main camera returned an unexpected frame shape: "
             f"expected={expected_shape}, received={frame.shape}, offscreen_mode={render_mode!r}, "
-            f"sensors={sensor_names}, version={version}, pinned_commit={PINNED_METADRIVE_COMMIT}."
+            f"sensors={sensor_names}, version={version}, pipe={pipe_name}, "
+            f"window={window_name}, pinned_commit={PINNED_METADRIVE_COMMIT}."
         )
     return frame
 
@@ -197,6 +229,7 @@ def main():
     environment = None
 
     try:
+        display_backend = _configure_chase_display(args.view, logger)
         log_system_info(logger, run_dir=run_dir)
         testing = get_evaluation_config(config, "test")
         if args.episodes_csv:
@@ -349,6 +382,7 @@ def main():
                 ],
                 "camera_fov": environment_config["camera_fov"],
                 "offscreen": True,
+                "display_backend": display_backend,
                 "metadrive_image_service_switch": args.view == "chase",
                 "policy_observation": "LidarStateObservation",
             },
