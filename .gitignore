@@ -1,10 +1,13 @@
 .DS_Store
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.ruff_cache/
 .ipynb_checkpoints/
-runs/
 .safedrive_runs_sync_state.json
 *.egg-info/
+
+# Report build products only. Experiment logs under runs/ are evidence.
 reports/*.aux
 reports/*.bbl
 reports/*.blg

@@ -320,35 +320,56 @@ python -m scripts.record_video \
 ```
 
 The recorder creates a separate offscreen environment with MetaDrive’s moving main
-camera. At the pinned commit, the recording-only environment must enable MetaDrive’s
-image-service switch to retain an offscreen camera; it simultaneously sets
-`agent_observation=LidarStateObservation`. The MLP therefore receives the same vector
-observation used in training, while rendered RGB frames are only encoded to MP4.
-The pinned macOS offscreen path also requires leaving MetaDrive's unused mouse flag
-enabled so `MainCamera` does not call a window-only method on a graphics buffer; all
-visible interface panels remain hidden.
+camera. MetaDrive natively selects offscreen rendering when `use_render=False` and a
+camera sensor is requested; a headless runtime does not need a fabricated `DISPLAY`.
+The recording config enables `image_observation` and declares
+`sensors.main_camera=()`, which MetaDrive expands to its own `MainCamera` at the requested
+window size. `vehicle_config.image_source` is `main_camera`.
 
-On Linux without a `DISPLAY`, including a standard Colab runtime, the recorder
-automatically relaunches itself inside Xvfb before MetaDrive is imported. This follows
-MetaDrive's Linux rendering-test setup and uses Mesa software GL for predictable video
-generation instead of a native EGL path that can terminate the Python process without a
-traceback. Training remains GPU-enabled; only video rendering uses this compatibility
-path. Linux hosts with a display and macOS retain Panda3D's platform-default pipe.
+The same config explicitly sets `agent_observation=LidarStateObservation`, so the SAC
+MLP still receives the exact vector observation used in training. RGB camera frames are
+presentation artifacts only. `image_on_cuda` remains false, the interface stays hidden,
+and `show_mouse` remains true because this pinned MetaDrive camera otherwise calls a
+window-only `requestProperties()` method on an offscreen `GraphicsBuffer`.
 
-The native Colab rendering stack is pinned to NumPy 1.26.4, OpenCV 4.11.0.86, and
-Panda3D 1.10.15. Section 7 verifies and repairs those versions when a resumed runtime did
-not rerun installation. It also creates Colab's normally absent `/dev/input` directory
-before Panda3D scans for input devices, selects Mesa's `llvmpipe` explicitly, and enables
-Python fault handling for any remaining native crash.
+The canonical diagnostic sequence is intentionally layered:
 
-The pinned API is `main_camera.perceive(to_float=False)`. Expected frames are
-1280×720 RGB. Failure does not silently fall back to top-down; diagnostics include render
-mode, sensors, display pipe, window type, version, commit, and frame shape.
+1. run MetaDrive's own native headless verifier:
+   `python -m metadrive.examples.verify_headless_installation --camera main`;
+2. run SafeDrive's direct, non-SB3 camera smoke:
+   `python -m scripts.record_video --config configs/sac_traffic_curriculum.yaml
+   --smoke-renderer --view chase --density 0.05 --seed 50000 --steps 5`;
+3. run the complete five-frame MP4 smoke and then normal video recording.
+
+All three use native Panda3D offscreen rendering. The canonical workflow does not install
+or launch Xvfb and does not inject a software-GL backend. A failed official verifier is
+recorded as a MetaDrive/Panda3D/runtime capability failure before SafeDrive's camera code
+is attempted.
+
+For reproducibility, the project currently pins NumPy 1.26.4, OpenCV 4.11.0.86, and
+Panda3D 1.10.16 during the one clean installation step. These are project environment
+choices, not a claim that NumPy fixes the archived native crash or that MetaDrive itself
+requires these exact versions. The notebook never hot-swaps compiled wheels in the smoke
+cell.
+
+The pinned capture API is
+`env.engine.get_sensor("main_camera").perceive(to_float=False)`. Frames are collected
+after simulation steps and validated for shape, dtype, finite data, and nonblank content.
+Failure never falls back silently to top-down. Diagnostics and video sidecars include
+render mode, sensors, graphics pipe/output, versions, pinned commit, vector-observation
+shape, and frame statistics.
 
 Scenario selection is systematic: the lowest seed satisfying `first`, `first_success`,
 or `first_failure`. Sidecar JSON records model, seed, density, traffic mode, outcome,
 return, completion, collision, frames, FPS, camera settings, observation shape, and
 fingerprint. `--view topdown` remains available for diagnostics.
+
+Notebook Section 7 deliberately separates training correctness from presentation
+capability. Compile/tests, vector physics, traffic spawning, single-agent/action checks,
+and checkpoint-space compatibility must pass before training. The three rendering checks
+then report `RENDERING STATUS: PASSED` or `FAILED`; a rendering-only failure preserves its
+logs but does not block LidarState SAC training. Video cells skip cleanly until a renderer
+passes locally or in a later clean Colab runtime.
 
 ## Progress, logging, and resources
 

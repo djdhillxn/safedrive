@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 
 
 PACKAGE_DISTRIBUTIONS = {
@@ -349,6 +348,8 @@ def append_run_manifest(output_dir, phase, record):
 
 def load_monitor_csvs(run_dir):
     """Load SB3 Monitor CSV files under a run directory."""
+    import pandas as pd
+
     run_dir = Path(run_dir)
     train_monitor_dir = run_dir / "logs" / "train_monitor"
     search_dir = train_monitor_dir if train_monitor_dir.exists() else run_dir
@@ -410,6 +411,8 @@ def plot_training_returns(run_dir, smoothing=20):
 
 def plot_eval_summary(eval_csv, out_dir=None):
     """Create simple evaluation plots from per-episode CSV."""
+    import pandas as pd
+
     plt = _plotter()
 
     eval_csv = Path(eval_csv)
@@ -462,6 +465,8 @@ def plot_eval_summary(eval_csv, out_dir=None):
 
 def plot_comparison_rows(rows, out_path, title="Held-out test comparison"):
     """Plot the four headline metrics for multiple agents."""
+    import pandas as pd
+
     plt = _plotter()
 
     frame = pd.DataFrame(rows)

@@ -1,8 +1,8 @@
 import ast
-import logging
 import math
 import random
 from pathlib import Path
+from types import SimpleNamespace
 
 import gymnasium as gym
 import numpy as np
@@ -32,6 +32,7 @@ from saferl_drive.envs import (
     _SteeringLimitWrapper,
     _valid_scenario_seed,
     _worker_scenario_seed,
+    enable_main_camera_capture,
 )
 from scripts.compare_runs import (
     _compatibility,
@@ -41,10 +42,11 @@ from scripts.compare_runs import (
 )
 from scripts.evaluate import _condition_config
 from scripts.record_video import (
-    _needs_virtual_display,
-    _prepare_linux_input_directory,
+    _camera_config,
     _raw_render_environment,
-    _xvfb_command,
+    _rendering_sidecar_fields,
+    _validate_frame,
+    make_rendering_status,
     select_video_scenario,
 )
 from scripts.train_curriculum import (
@@ -442,7 +444,6 @@ def test_traffic_reward_variants_change_only_the_controlled_penalties():
 
 
 def test_traffic_config_rejects_multi_agent_or_image_training():
-    config = load_yaml("configs/sac_traffic_curriculum.yaml")
     for key, value, message in [
         ("num_agents", 2, "num_agents=1"),
         ("is_multi_agent", True, "is_multi_agent=false"),
@@ -764,54 +765,132 @@ def test_video_scenario_selection_is_systematic(tmp_path):
     assert select_video_scenario(path, "first_failure") == 60000
 
 
-def test_chase_uses_xvfb_only_on_displayless_linux():
-    assert _needs_virtual_display("chase", "linux", "")
-    assert not _needs_virtual_display("chase", "linux", ":0")
-    assert not _needs_virtual_display("topdown", "linux", "")
-    assert not _needs_virtual_display("chase", "darwin", "")
-    command = _xvfb_command(
-        320,
-        192,
-        arguments=["--config", "example.yaml"],
-        executable="/usr/bin/python",
-        xvfb_run="/usr/bin/xvfb-run",
-    )
-    assert command == [
-        "/usr/bin/xvfb-run",
-        "-a",
-        "-s",
-        "-screen 0 1280x1024x24 -nolisten tcp",
-        "/usr/bin/python",
-        "-m",
-        "scripts.record_video",
-        "--config",
-        "example.yaml",
+def test_chase_config_uses_native_offscreen_main_camera_and_vector_policy_input():
+    config = load_yaml("configs/sac_traffic_curriculum.yaml")
+    args = SimpleNamespace(view="chase", width=320, height=192, density=0.05)
+
+    camera_config = _camera_config(config, args, video_seed=50000)
+
+    assert camera_config["use_render"] is False
+    assert camera_config["image_observation"] is True
+    assert camera_config["image_on_cuda"] is False
+    assert camera_config["sensors"]["main_camera"] == ()
+    assert camera_config["vehicle_config"]["image_source"] == "main_camera"
+    assert camera_config["agent_observation"].__name__ == "LidarStateObservation"
+    assert camera_config["show_mouse"] is True
+    assert camera_config["window_size"] == (320, 192)
+    assert camera_config["num_agents"] == 1
+    assert camera_config["is_multi_agent"] is False
+    assert camera_config["traffic_density"] == 0.05
+
+
+def test_main_camera_helper_does_not_mutate_training_config():
+    training_config = {"image_observation": False, "vehicle_config": {}}
+
+    camera_config = enable_main_camera_capture(training_config)
+
+    assert training_config == {"image_observation": False, "vehicle_config": {}}
+    assert camera_config["sensors"]["main_camera"] == ()
+    assert camera_config["image_observation"] is True
+    assert camera_config["image_on_cuda"] is False
+    assert camera_config["vehicle_config"]["image_source"] == "main_camera"
+    assert camera_config["agent_observation"].__name__ == "LidarStateObservation"
+
+
+def test_topdown_diagnostic_does_not_enable_the_main_camera_image_service():
+    config = load_yaml("configs/sac_traffic_curriculum.yaml")
+    args = SimpleNamespace(view="topdown", width=320, height=192, density=0.05)
+
+    diagnostic_config = _camera_config(config, args, video_seed=50000)
+
+    assert diagnostic_config["image_observation"] is False
+    assert "main_camera" not in diagnostic_config.get("sensors", {})
+
+
+def test_frame_validator_accepts_uint8_color_and_rejects_blank_or_malformed_frames():
+    valid = np.zeros((4, 6, 3), dtype=np.uint8)
+    valid[1, 2] = [10, 20, 30]
+
+    accepted = _validate_frame(valid, (4, 6, 3))
+
+    assert accepted.dtype == np.uint8
+    assert accepted.shape == (4, 6, 3)
+    invalid_frames = [
+        np.zeros((4, 6, 3), dtype=np.uint8),
+        np.zeros((4, 6), dtype=np.uint8),
+        np.zeros((4, 6, 2), dtype=np.uint8),
+        np.zeros((4, 6, 4), dtype=np.uint8),
+        np.full((4, 6, 3), np.nan),
     ]
+    for invalid in invalid_frames:
+        try:
+            _validate_frame(invalid, (4, 6, 3))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"Invalid renderer frame was accepted: {invalid.shape}")
 
 
-def test_chase_prepares_empty_linux_input_directory(tmp_path):
-    input_directory = tmp_path / "dev" / "input"
-    logger = logging.getLogger("test_video_input_directory")
+def test_video_sidecar_contains_renderer_and_policy_interface_metadata():
+    environment_config = {
+        "window_size": (320, 192),
+        "camera_dist": 8.5,
+        "camera_height": 2.8,
+        "camera_smooth": True,
+        "use_chase_camera_follow_lane": True,
+        "camera_fov": 65,
+    }
+    renderer = {
+        "metadrive_version": "0.4.3",
+        "metadrive_pinned_commit": "commit",
+        "panda3d_version": "1.10.16",
+        "render_mode": "offscreen",
+        "graphics_pipe": "Pipe",
+        "graphics_output": "Buffer",
+        "image_source": "main_camera",
+        "sensor_name": "main_camera",
+        "frame": {"shape": [192, 320, 3], "dtype": "uint8"},
+    }
+    frame = np.zeros((192, 320, 3), dtype=np.uint8)
 
-    assert _prepare_linux_input_directory(
-        "chase",
-        logger,
-        platform_name="linux",
-        input_directory=input_directory,
+    fields = _rendering_sidecar_fields(environment_config, renderer, (259,), frame)
+
+    assert fields["renderer"] == renderer
+    assert fields["camera"]["image_source"] == "main_camera"
+    assert fields["camera"]["sensor_name"] == "main_camera"
+    assert fields["camera"]["policy_observation"] == "LidarStateObservation"
+    assert fields["camera"]["offscreen"] is True
+    assert fields["vector_observation_shape"] == [259]
+    assert fields["frame_shape"] == [192, 320, 3]
+    assert fields["frame_dtype"] == "uint8"
+
+
+def test_rendering_failure_keeps_training_ready_and_names_the_failed_boundary():
+    status = make_rendering_status(
+        "failed",
+        "official_metadrive_verifier",
+        exit_code=139,
+        diagnostics={"log": "runs/metadrive_headless_verifier.log"},
     )
-    assert input_directory.is_dir()
-    assert not _prepare_linux_input_directory(
-        "chase",
-        logger,
-        platform_name="linux",
-        input_directory=input_directory,
-    )
-    assert not _prepare_linux_input_directory(
-        "topdown",
-        logger,
-        platform_name="linux",
-        input_directory=tmp_path / "unused",
-    )
+
+    assert status["training_status"] == "ready"
+    assert status["rendering_status"] == "failed"
+    assert status["first_failing_boundary"] == "official_metadrive_verifier"
+    assert status["completed_boundary"] is None
+    assert status["exit_code"] == 139
+
+
+def test_compiled_dependency_pins_agree_for_clean_colab_installation():
+    requirements = Path("requirements.txt").read_text(encoding="utf-8")
+    project = Path("pyproject.toml").read_text(encoding="utf-8")
+
+    for requirement in [
+        "numpy==1.26.4",
+        "opencv-python==4.11.0.86",
+        "panda3d==1.10.16",
+    ]:
+        assert requirement in requirements
+        assert f'"{requirement}"' in project
 
 
 def test_checkpoint_selection_prioritizes_success_then_route_completion():

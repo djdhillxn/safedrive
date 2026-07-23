@@ -328,6 +328,8 @@ def test_canonical_notebook_is_valid_concise_and_has_all_twenty_sections():
         "".join(cell["source"]).splitlines()[0]
         for cell in notebook["cells"]
         if cell["cell_type"] == "markdown"
+        and "".join(cell["source"]).splitlines()[0].startswith(("# ", "## "))
+        and not "".join(cell["source"]).splitlines()[0].startswith("### ")
     ]
 
     assert notebook["nbformat"] == 4
@@ -342,6 +344,26 @@ def test_canonical_notebook_is_valid_concise_and_has_all_twenty_sections():
     assert "confirmation_status not in {\"complete\", \"failed_gate\"}" in text
     assert "excluded from completed-lineage aggregates" in text
     assert "no success video will be fabricated" in text
+    assert "### 7A. Training-critical gate (blocking)" in text
+    assert "### 7B. Rendering-capability gate (diagnostic and non-blocking)" in text
+    assert "--training-smoke" in text
+    assert "TRAINING STATUS: READY" in text
+    assert "RENDERING STATUS:" in text
+    assert "rendering_status.json" in text
+    assert "metadrive.examples.verify_headless_installation --camera main" in text
+    assert "--smoke-renderer" in text
+    assert "TRAINING REMAINS AUTHORIZED" in text
+    source_text = text.lower()
+    for forbidden in [
+        "xvfb",
+        "llvmpipe",
+        "libgl_always_software",
+        "mesa_loader_driver_override",
+        "gallium_driver",
+        "force-reinstall",
+        "apt-get install",
+    ]:
+        assert forbidden not in source_text
     for command in [
         "!python -m scripts.train_curriculum",
         "!python -m scripts.evaluate ",

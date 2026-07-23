@@ -2,18 +2,11 @@
 
 import argparse
 import importlib.metadata
-import os
-import shutil
-import subprocess
-import sys
 from pathlib import Path
 
 import imageio.v2 as imageio
 import numpy as np
-import pandas as pd
-from stable_baselines3.common.vec_env import VecNormalize
 
-from saferl_drive.algorithms import get_algorithm_class
 from saferl_drive.config import (
     apply_dotlist_overrides,
     deep_update,
@@ -22,13 +15,11 @@ from saferl_drive.config import (
     make_experiment_fingerprint,
     make_eval_metadrive_config,
 )
-from saferl_drive.envs import find_vecnormalize_path, make_vec_env
+from saferl_drive.envs import enable_main_camera_capture, find_vecnormalize_path, make_vec_env
 from saferl_drive.utils import log_system_info, set_global_seeds, setup_logging, write_json
 
 
 PINNED_METADRIVE_COMMIT = "85e5dadc6c7436d324348f6e3d8f8e680c06b4db"
-XVFB_ACTIVE = "SAFEDRIVE_XVFB_ACTIVE"
-LINUX_INPUT_DIRECTORY = Path("/dev/input")
 
 
 class _DummyActionPolicy:
@@ -44,7 +35,12 @@ def parse_args():
     parser.add_argument("--policy", choices=["idm", "expert"], default=None)
     parser.add_argument("--model", default="best", choices=["final", "best"])
     parser.add_argument("--view", default="chase", choices=["chase", "topdown"])
-    parser.add_argument("--steps", type=int, default=1000)
+    parser.add_argument("--steps", type=int, default=None)
+    parser.add_argument(
+        "--smoke-renderer",
+        action="store_true",
+        help="Capture 3-5 direct MetaDrive main-camera PNGs without SB3 or VecEnv.",
+    )
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--episodes-csv", default=None)
     parser.add_argument(
@@ -64,17 +60,53 @@ def parse_args():
 
 def _to_uint8_frame(frame):
     array = np.asarray(frame)
+    if not array.size:
+        raise ValueError("The renderer returned an empty frame.")
+    try:
+        finite = bool(np.isfinite(array).all())
+    except TypeError as error:
+        raise ValueError(
+            f"The renderer returned a non-numeric frame with dtype {array.dtype}."
+        ) from error
+    if not finite:
+        raise ValueError("The renderer returned a frame containing non-finite values.")
+    if array.ndim != 3:
+        raise ValueError(f"Expected an HxWx3 video frame, received {array.shape}.")
+    if array.shape[-1] != 3:
+        raise ValueError(f"Expected three color channels, received {array.shape}.")
     if array.dtype != np.uint8:
         if array.size and array.max() <= 1.0:
             array = array * 255.0
         array = np.clip(array, 0, 255).astype(np.uint8)
-    if array.ndim == 2:
-        array = np.repeat(array[..., None], 3, axis=-1)
-    if array.ndim != 3:
-        raise ValueError(f"Expected a three-dimensional video frame, received {array.shape}.")
-    if array.shape[-1] == 4:
-        array = array[..., :3]
     return array
+
+
+def _validate_frame(frame, expected_shape):
+    array = _to_uint8_frame(frame)
+    if tuple(array.shape) != tuple(expected_shape):
+        raise ValueError(
+            "The main camera returned an unexpected frame shape: "
+            f"expected={tuple(expected_shape)}, received={array.shape}."
+        )
+    minimum = int(array.min())
+    maximum = int(array.max())
+    if maximum == 0 or maximum == minimum:
+        raise ValueError(
+            "The main camera returned a blank or constant frame: "
+            f"min={minimum}, max={maximum}, shape={array.shape}."
+        )
+    return array
+
+
+def _frame_statistics(frame):
+    return {
+        "shape": list(frame.shape),
+        "dtype": str(frame.dtype),
+        "minimum": int(frame.min()),
+        "maximum": int(frame.max()),
+        "range": int(frame.max()) - int(frame.min()),
+        "variance": float(np.var(frame)),
+    }
 
 
 def _raw_render_environment(vector_environment):
@@ -91,6 +123,8 @@ def _raw_render_environment(vector_environment):
 
 def select_video_scenario(episodes_csv, rule):
     """Select the lowest scenario seed satisfying a declared outcome rule."""
+    import pandas as pd
+
     frame = pd.read_csv(episodes_csv)
     if "env_seed" not in frame:
         raise ValueError(f"Evaluation CSV has no env_seed column: {episodes_csv}")
@@ -105,83 +139,6 @@ def select_video_scenario(episodes_csv, rule):
     return int(selected.sort_values(["env_seed", "episode"]).iloc[0]["env_seed"])
 
 
-def _needs_virtual_display(view, platform_name=None, display=None):
-    """Return whether chase rendering needs a Linux virtual display."""
-    platform_name = platform_name or sys.platform
-    if display is None:
-        display = os.environ.get("DISPLAY")
-    return view == "chase" and platform_name.startswith("linux") and not display
-
-
-def _xvfb_command(width, height, arguments=None, executable=None, xvfb_run=None):
-    arguments = list(sys.argv[1:] if arguments is None else arguments)
-    executable = executable or sys.executable
-    xvfb_run = xvfb_run or shutil.which("xvfb-run")
-    if xvfb_run is None:
-        raise RuntimeError(
-            "Chase rendering on display-less Linux requires xvfb-run. "
-            "Install the xvfb and xauth system packages, then retry."
-        )
-    screen_width = max(int(width), 1280)
-    screen_height = max(int(height), 1024)
-    return [
-        xvfb_run,
-        "-a",
-        "-s",
-        f"-screen 0 {screen_width}x{screen_height}x24 -nolisten tcp",
-        executable,
-        "-m",
-        "scripts.record_video",
-        *arguments,
-    ]
-
-
-def _prepare_linux_input_directory(view, logger, platform_name=None, input_directory=None):
-    """Give Panda3D an empty input-device directory in minimal Linux containers."""
-    platform_name = platform_name or sys.platform
-    if view != "chase" or not platform_name.startswith("linux"):
-        return False
-    input_directory = Path(input_directory or LINUX_INPUT_DIRECTORY)
-    if input_directory.exists():
-        return False
-    try:
-        input_directory.mkdir(parents=True)
-    except OSError as error:
-        logger.warning(
-            "Could not create %s for Panda3D input discovery: %s",
-            input_directory,
-            error,
-        )
-        return False
-    logger.info("Created empty Panda3D input-device directory: %s.", input_directory)
-    return True
-
-
-def _run_with_virtual_display(args, logger):
-    if not _needs_virtual_display(args.view):
-        return None
-    command = _xvfb_command(args.width, args.height)
-    environment = os.environ.copy()
-    environment[XVFB_ACTIVE] = "1"
-    environment["LIBGL_ALWAYS_SOFTWARE"] = "1"
-    environment["MESA_LOADER_DRIVER_OVERRIDE"] = "llvmpipe"
-    environment["GALLIUM_DRIVER"] = "llvmpipe"
-    environment["PYTHONFAULTHANDLER"] = "1"
-    logger.info("Relaunching chase recorder inside an Xvfb software-GL display.")
-    result = subprocess.run(command, env=environment)
-    if result.returncode != 0:
-        logger.error("The Xvfb chase recorder exited with code %s.", result.returncode)
-    return result.returncode
-
-
-def _display_backend(view, logger):
-    if view == "chase" and os.environ.get(XVFB_ACTIVE) == "1":
-        logger.info("Using Panda3D through Xvfb display %s.", os.environ.get("DISPLAY"))
-        return "xvfb_software_glx"
-    logger.debug("Using Panda3D's platform-default display backend.")
-    return "platform_default"
-
-
 def _camera_config(config, args, video_seed):
     environment_config = make_eval_metadrive_config(config, "test")
     environment_config.update(
@@ -192,6 +149,7 @@ def _camera_config(config, args, video_seed):
             "random_spawn_lane_index": False,
             "use_render": False,
             "image_observation": False,
+            "image_on_cuda": False,
             "window_size": (args.width, args.height),
             "camera_dist": 8.5,
             "camera_height": 2.8,
@@ -209,52 +167,209 @@ def _camera_config(config, args, video_seed):
             # method, so leave the unused cursor path enabled for chase capture.
             "show_mouse": True,
             "interface_panel": [],
-            "_safedrive_main_camera": args.view == "chase",
             "num_agents": 1,
             "is_multi_agent": False,
         }
     )
+    if args.view == "chase":
+        environment_config = enable_main_camera_capture(environment_config)
     if args.density is not None:
         environment_config["traffic_density"] = float(args.density)
         environment_config["traffic_mode"] = "respawn"
     return environment_config
 
 
-def _chase_frame(render_environment, expected_shape):
-    camera = getattr(render_environment, "main_camera", None)
+def _package_version(name):
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return "not installed"
+
+
+def _renderer_metadata(render_environment, frame=None):
     engine = getattr(render_environment, "engine", None)
     sensor_names = sorted(getattr(engine, "sensors", {}).keys()) if engine else []
     pipe = getattr(engine, "pipe", None) if engine else None
-    pipe_name = pipe.__class__.__name__ if pipe is not None else None
     window = getattr(engine, "win", None) if engine else None
-    window_name = window.__class__.__name__ if window is not None else None
-    render_mode = render_environment.config.get("_render_mode")
-    try:
-        version = importlib.metadata.version("metadrive-simulator")
-    except importlib.metadata.PackageNotFoundError:
-        version = "not installed"
+    config = getattr(render_environment, "config", {})
+    metadata = {
+        "metadrive_version": _package_version("metadrive-simulator"),
+        "metadrive_pinned_commit": PINNED_METADRIVE_COMMIT,
+        "panda3d_version": _package_version("panda3d"),
+        "render_mode": config.get("_render_mode"),
+        "graphics_pipe": pipe.__class__.__name__ if pipe is not None else None,
+        "graphics_output": window.__class__.__name__ if window is not None else None,
+        "sensor_names": sensor_names,
+        "sensor_name": "main_camera",
+        "image_source": config.get("vehicle_config", {}).get("image_source"),
+    }
+    if frame is not None:
+        metadata["frame"] = _frame_statistics(frame)
+    return metadata
+
+
+def _capture_main_camera_frame(render_environment, expected_shape, logger=None):
+    engine = getattr(render_environment, "engine", None)
+    camera = None
+    if engine is not None:
+        try:
+            camera = engine.get_sensor("main_camera")
+        except (KeyError, RuntimeError, ValueError):
+            camera = None
+    if camera is None:
+        camera = getattr(render_environment, "main_camera", None)
+    metadata = _renderer_metadata(render_environment)
     if camera is None:
         raise RuntimeError(
             "MetaDrive main camera was not created. "
-            f"offscreen_mode={render_mode!r}, sensors={sensor_names}, version={version}, "
-            f"pipe={pipe_name}, window={window_name}, pinned_commit={PINNED_METADRIVE_COMMIT}."
+            f"renderer={metadata}."
         )
     try:
-        frame = _to_uint8_frame(camera.perceive(to_float=False))
+        frame = _validate_frame(camera.perceive(to_float=False), expected_shape)
     except Exception as error:
         raise RuntimeError(
             "MetaDrive main-camera frame capture failed. "
-            f"offscreen_mode={render_mode!r}, sensors={sensor_names}, version={version}, "
-            f"pipe={pipe_name}, window={window_name}, pinned_commit={PINNED_METADRIVE_COMMIT}."
+            f"renderer={metadata}."
         ) from error
-    if tuple(frame.shape) != tuple(expected_shape):
-        raise RuntimeError(
-            "MetaDrive main camera returned an unexpected frame shape: "
-            f"expected={expected_shape}, received={frame.shape}, offscreen_mode={render_mode!r}, "
-            f"sensors={sensor_names}, version={version}, pipe={pipe_name}, "
-            f"window={window_name}, pinned_commit={PINNED_METADRIVE_COMMIT}."
+    metadata = _renderer_metadata(render_environment, frame)
+    if logger is not None:
+        logger.info(
+            "Main-camera frame: mode=%s sensor=%s pipe=%s output=%s shape=%s "
+            "dtype=%s min=%s max=%s variance=%.3f",
+            metadata["render_mode"],
+            metadata["sensor_name"],
+            metadata["graphics_pipe"],
+            metadata["graphics_output"],
+            metadata["frame"]["shape"],
+            metadata["frame"]["dtype"],
+            metadata["frame"]["minimum"],
+            metadata["frame"]["maximum"],
+            metadata["frame"]["variance"],
         )
-    return frame
+    return frame, metadata
+
+
+def _rendering_sidecar_fields(environment_config, renderer_metadata, observation_shape, frame):
+    image_source = renderer_metadata.get("image_source")
+    sensor_name = renderer_metadata.get("sensor_name")
+    return {
+        "camera": {
+            "resolution": [
+                int(environment_config["window_size"][0]),
+                int(environment_config["window_size"][1]),
+            ],
+            "camera_dist": environment_config["camera_dist"],
+            "camera_height": environment_config["camera_height"],
+            "camera_smooth": environment_config["camera_smooth"],
+            "use_chase_camera_follow_lane": environment_config[
+                "use_chase_camera_follow_lane"
+            ],
+            "camera_fov": environment_config["camera_fov"],
+            "offscreen": renderer_metadata.get("render_mode") == "offscreen",
+            "image_source": image_source,
+            "sensor_name": sensor_name,
+            "policy_observation": "LidarStateObservation",
+        },
+        "renderer": renderer_metadata,
+        "vector_observation_shape": list(observation_shape),
+        "frame_shape": list(frame.shape),
+        "frame_dtype": str(frame.dtype),
+    }
+
+
+def make_rendering_status(rendering_status, boundary, exit_code=None, diagnostics=None):
+    if rendering_status not in {"passed", "failed"}:
+        raise ValueError("rendering_status must be 'passed' or 'failed'.")
+    return {
+        "training_status": "ready",
+        "rendering_status": rendering_status,
+        "first_failing_boundary": boundary if rendering_status == "failed" else None,
+        "completed_boundary": boundary if rendering_status == "passed" else None,
+        "exit_code": exit_code,
+        "diagnostics": diagnostics or {},
+    }
+
+
+def _run_bare_renderer_smoke(config, args, video_seed, logger):
+    from metadrive.envs import MetaDriveEnv
+    from metadrive.policy.expert_policy import ExpertPolicy
+
+    if args.view != "chase":
+        raise ValueError("--smoke-renderer validates the chase main camera only.")
+    smoke_steps = int(args.steps or 5)
+    if not 3 <= smoke_steps <= 5:
+        raise ValueError("--smoke-renderer requires --steps between 3 and 5.")
+    output_directory = Path(args.output or "/tmp/safedrive_renderer_smoke")
+    output_directory.mkdir(parents=True, exist_ok=True)
+    environment_config = _camera_config(config, args, video_seed)
+    # These keys are implemented by SafeDrive wrappers in make_metadrive_env().
+    # A direct MetaDriveEnv smoke must not pass project-only settings into
+    # MetaDrive's strict configuration validator.
+    for project_key in ["reward_shaping", "steering_limit", "sequential_seed"]:
+        environment_config.pop(project_key, None)
+    environment_config["agent_policy"] = ExpertPolicy
+    environment_config["manual_control"] = False
+    environment = None
+    frames = []
+    renderer_metadata = None
+    return_sum = 0.0
+    final_info = {}
+    try:
+        environment = MetaDriveEnv(environment_config)
+        observation, final_info = environment.reset(seed=video_seed)
+        observation_shape = tuple(np.asarray(observation).shape)
+        vector_space_shape = tuple(environment.observation_space.shape)
+        if len(observation_shape) != 1 or observation_shape != vector_space_shape:
+            raise RuntimeError(
+                "Bare renderer smoke changed the policy-facing vector observation: "
+                f"space={vector_space_shape}, received={observation_shape}."
+            )
+        if tuple(environment.action_space.shape) != (2,):
+            raise RuntimeError(
+                "Bare renderer smoke changed the continuous action interface: "
+                f"received={environment.action_space.shape}."
+            )
+        traffic_count = len(environment.engine.traffic_manager.traffic_vehicles)
+        if float(environment_config.get("traffic_density", 0.0)) > 0.0 and traffic_count < 1:
+            raise RuntimeError("Bare renderer smoke requested traffic but spawned none.")
+        expected_shape = (args.height, args.width, 3)
+        for frame_index in range(smoke_steps):
+            observation, reward, terminated, truncated, final_info = environment.step(
+                [0.0, 0.0]
+            )
+            return_sum += float(reward)
+            frame, renderer_metadata = _capture_main_camera_frame(
+                environment,
+                expected_shape,
+                logger=logger,
+            )
+            frame_path = output_directory / f"main_camera_{frame_index:02d}.png"
+            imageio.imwrite(frame_path, frame)
+            frames.append(frame_path)
+            if terminated or truncated:
+                break
+        if len(frames) < 3:
+            raise RuntimeError(f"Bare renderer smoke produced only {len(frames)} valid frames.")
+        summary = {
+            "status": "passed",
+            "scenario_seed": video_seed,
+            "traffic_density": float(environment_config.get("traffic_density", 0.0)),
+            "traffic_vehicle_count": traffic_count,
+            "frames": [str(path) for path in frames],
+            "frame_count": len(frames),
+            "vector_observation_shape": list(observation_shape),
+            "policy_observation": environment_config["agent_observation"].__name__,
+            "action_shape": list(environment.action_space.shape),
+            "return": return_sum,
+            "outcome": _terminal_outcome(final_info),
+            "renderer": renderer_metadata,
+        }
+        write_json(summary, output_directory / "renderer_smoke.json")
+        logger.info("Bare native-offscreen renderer smoke passed: %s", output_directory)
+        return summary
+    finally:
+        if environment is not None:
+            environment.close()
 
 
 def _terminal_outcome(info):
@@ -274,24 +389,22 @@ def _terminal_outcome(info):
 
 def main():
     args = parse_args()
-    if args.config and args.policy is None:
+    if args.smoke_renderer and not args.config:
+        raise ValueError("--smoke-renderer requires --config.")
+    if args.smoke_renderer and args.policy not in {None, "expert"}:
+        raise ValueError("--smoke-renderer uses MetaDrive ExpertPolicy.")
+    if args.config and args.policy is None and not args.smoke_renderer:
         raise ValueError("--config recording requires --policy idm or --policy expert.")
     run_dir = Path(args.run_dir) if args.run_dir else None
     config_path = run_dir / "resolved_config.yaml" if run_dir else Path(args.config)
     config = apply_dotlist_overrides(load_yaml(config_path), args.overrides)
     video_root = run_dir if run_dir else Path(config.get("experiment", {}).get("output_dir", "runs"))
     log_dir = run_dir / "logs" if run_dir else video_root
-    logger = setup_logging(log_dir / f"video_{args.view}.log")
+    log_name = "renderer_smoke.log" if args.smoke_renderer else f"video_{args.view}.log"
+    logger = setup_logging(log_dir / log_name)
     environment = None
 
     try:
-        _prepare_linux_input_directory(args.view, logger)
-        virtual_display_exit = _run_with_virtual_display(args, logger)
-        if virtual_display_exit is not None:
-            if virtual_display_exit != 0:
-                raise SystemExit(virtual_display_exit)
-            return
-        display_backend = _display_backend(args.view, logger)
         log_system_info(logger, run_dir=run_dir)
         testing = get_evaluation_config(config, "test")
         if args.episodes_csv:
@@ -299,6 +412,9 @@ def main():
         else:
             video_seed = int(args.seed if args.seed is not None else testing.get("start_seed", 4000))
         set_global_seeds(video_seed)
+        if args.smoke_renderer:
+            _run_bare_renderer_smoke(config, args, video_seed, logger)
+            return
         environment_config = _camera_config(config, args, video_seed)
         policy_class_name = None
         if args.policy:
@@ -320,6 +436,10 @@ def main():
         selected_model = args.model
         model_path = None
         if run_dir:
+            from stable_baselines3.common.vec_env import VecNormalize
+
+            from saferl_drive.algorithms import get_algorithm_class
+
             model_path = run_dir / "models" / f"{selected_model}_model.zip"
             if selected_model == "best" and not model_path.exists():
                 selected_model = "final"
@@ -358,30 +478,44 @@ def main():
         environment.seed(video_seed)
         observation = environment.reset()
         render_environment = _raw_render_environment(environment)
-        if np.asarray(observation).ndim != 2:
+        observation_array = np.asarray(observation)
+        expected_observation_shape = tuple(environment.observation_space.shape)
+        if (
+            observation_array.ndim != 2
+            or tuple(observation_array.shape[1:]) != expected_observation_shape
+        ):
             raise RuntimeError(
                 "Recording did not preserve the vector LidarState observation: "
-                f"received observation shape {np.asarray(observation).shape}."
+                f"space={expected_observation_shape}, received={observation_array.shape}."
             )
         frames = []
+        renderer_metadata = None
         final_info = {}
         return_sum = 0.0
         expected_shape = (args.height, args.width, 3)
-        for _ in range(args.steps):
+        recording_steps = int(args.steps or 1000)
+        for _ in range(recording_steps):
+            action, _ = model.predict(observation, deterministic=True)
+            observation, rewards, dones, infos = environment.step(action)
+            return_sum += float(rewards[0])
+            final_info = dict(infos[0])
             if args.view == "chase":
-                frame = _chase_frame(render_environment, expected_shape)
+                frame, renderer_metadata = _capture_main_camera_frame(
+                    render_environment,
+                    expected_shape,
+                    logger=logger if not frames else None,
+                )
             else:
                 frame = render_environment.render(
                     mode="topdown",
                     window=False,
                     screen_size=(args.width, args.height),
                 )
-                frame = _to_uint8_frame(frame)
+                frame = _validate_frame(frame, expected_shape)
+                renderer_metadata = _renderer_metadata(render_environment, frame)
+                renderer_metadata["sensor_name"] = "topdown"
+                renderer_metadata["image_source"] = "topdown"
             frames.append(frame)
-            action, _ = model.predict(observation, deterministic=True)
-            observation, rewards, dones, infos = environment.step(action)
-            return_sum += float(rewards[0])
-            final_info = dict(infos[0])
             if bool(dones[0]):
                 break
 
@@ -397,7 +531,20 @@ def main():
             f"_seed{video_seed}.mp4"
         )
         output.parent.mkdir(parents=True, exist_ok=True)
-        imageio.mimsave(output, frames, fps=args.fps)
+        logger.info(
+            "SafeDrive frame-collection boundary passed with %s valid frames; "
+            "starting imageio MP4 encoding.",
+            len(frames),
+        )
+        try:
+            imageio.mimsave(output, frames, fps=args.fps)
+        except Exception as error:
+            raise RuntimeError(
+                f"Imageio MP4 encoding failed after collecting {len(frames)} valid frames."
+            ) from error
+        if not output.exists() or output.stat().st_size == 0:
+            raise RuntimeError("Imageio returned without producing a nonempty MP4.")
+        logger.info("Imageio MP4 encoding boundary passed: %s bytes.", output.stat().st_size)
         controller = policy_class_name if policy_class_name else None
         fingerprint_config = deep_update(
             config,
@@ -422,7 +569,9 @@ def main():
             "model_run": str(run_dir) if run_dir else model_label,
             "model": model_label,
             "scenario_seed": video_seed,
-            "scenario_selection_rule": args.scenario_rule if args.episodes_csv else "explicit_or_split_start",
+            "scenario_selection_rule": (
+                args.scenario_rule if args.episodes_csv else "explicit_or_split_start"
+            ),
             "scenario_selection_csv": args.episodes_csv,
             "traffic_density": density,
             "traffic_mode": environment_config.get("traffic_mode"),
@@ -434,25 +583,18 @@ def main():
             "frames": len(frames),
             "fps": args.fps,
             "view": args.view,
-            "camera": {
-                "resolution": [args.width, args.height],
-                "camera_dist": environment_config["camera_dist"],
-                "camera_height": environment_config["camera_height"],
-                "camera_smooth": environment_config["camera_smooth"],
-                "use_chase_camera_follow_lane": environment_config[
-                    "use_chase_camera_follow_lane"
-                ],
-                "camera_fov": environment_config["camera_fov"],
-                "offscreen": True,
-                "display_backend": display_backend,
-                "metadrive_image_service_switch": args.view == "chase",
-                "policy_observation": "LidarStateObservation",
-            },
-            "vector_observation_shape": list(environment.observation_space.shape),
             "experiment_fingerprint": fingerprint,
             "metadrive_pinned_commit": PINNED_METADRIVE_COMMIT,
             "video": str(output),
         }
+        sidecar.update(
+            _rendering_sidecar_fields(
+                environment_config,
+                renderer_metadata,
+                environment.observation_space.shape,
+                frames[-1],
+            )
+        )
         write_json(sidecar, output.with_suffix(".json"))
         logger.info(
             "Saved %s video with %s frames for scenario %s: %s",

@@ -13,10 +13,10 @@ dependencies = [
     "metadrive-simulator @ git+https://github.com/metadriverse/metadrive.git@85e5dadc6c7436d324348f6e3d8f8e680c06b4db",
     "stable-baselines3[extra]>=2.3.0",
     "gymnasium>=0.29.1,<2.0",
-    # Keep Colab's native renderer on the stack used with this MetaDrive snapshot.
+    # Reproducible compiled-package versions for the Colab environment.
     "numpy==1.26.4",
     "opencv-python==4.11.0.86",
-    "panda3d==1.10.15",
+    "panda3d==1.10.16",
     "pandas>=2.0",
     "pyyaml>=6.0",
     "matplotlib>=3.7",

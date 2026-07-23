@@ -5,8 +5,6 @@ from pathlib import Path
 
 import gymnasium as gym
 import numpy as np
-from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
 
 from saferl_drive.utils import set_global_seeds
 
@@ -122,6 +120,28 @@ class _MetaDriveScenarioSeedWrapper(gym.Wrapper):
             self.next_sequential_seed = self.start_seed + offset % self.num_scenarios
         return self.env.reset(**kwargs)
 
+    def safedrive_diagnostics(self):
+        """Return small, serializable facts for the training-critical smoke gate."""
+        raw_environment = self.env.unwrapped
+        config = raw_environment.config
+        engine = getattr(raw_environment, "engine", None)
+        traffic_manager = getattr(engine, "traffic_manager", None) if engine else None
+        traffic_vehicles = (
+            getattr(traffic_manager, "traffic_vehicles", []) if traffic_manager else []
+        )
+        return {
+            "observation_shape": list(getattr(self.observation_space, "shape", ()) or ()),
+            "observation_dtype": str(getattr(self.observation_space, "dtype", "unknown")),
+            "action_shape": list(getattr(self.action_space, "shape", ()) or ()),
+            "action_dtype": str(getattr(self.action_space, "dtype", "unknown")),
+            "num_agents": int(config.get("num_agents", 1)),
+            "is_multi_agent": bool(config.get("is_multi_agent", False)),
+            "image_observation": bool(config.get("image_observation", False)),
+            "render_mode": config.get("_render_mode"),
+            "traffic_density": float(config.get("traffic_density", 0.0)),
+            "traffic_vehicle_count": len(traffic_vehicles),
+        }
+
 
 class _SteeringLimitWrapper(gym.ActionWrapper):
     """Expose a smaller steering range for the straight-road learning control."""
@@ -160,9 +180,23 @@ def sanitize_metadrive_config(env_config):
     return cfg
 
 
+def enable_main_camera_capture(env_config):
+    """Enable MetaDrive's offscreen main camera while keeping vector observations."""
+    from metadrive.obs.state_obs import LidarStateObservation
+
+    cfg = copy.deepcopy(env_config)
+    cfg.setdefault("sensors", {})["main_camera"] = ()
+    cfg["image_observation"] = True
+    cfg["image_on_cuda"] = False
+    cfg["agent_observation"] = LidarStateObservation
+    cfg.setdefault("vehicle_config", {})["image_source"] = "main_camera"
+    return cfg
+
+
 def make_metadrive_env(env_config, seed=None, monitor_file=None, scenario_seed=None):
     """Create a single MetaDriveEnv instance wrapped with SB3 Monitor."""
     from metadrive.envs import MetaDriveEnv
+    from stable_baselines3.common.monitor import Monitor
 
     cfg = sanitize_metadrive_config(env_config)
     reward_shaping = cfg.pop("reward_shaping", None)
@@ -171,15 +205,7 @@ def make_metadrive_env(env_config, seed=None, monitor_file=None, scenario_seed=N
     policy_name = cfg.pop("_safedrive_agent_policy", None)
     main_camera_capture = bool(cfg.pop("_safedrive_main_camera", False))
     if main_camera_capture:
-        from metadrive.engine.core.main_camera import MainCamera
-        from metadrive.obs.state_obs import LidarStateObservation
-
-        cfg.setdefault("sensors", {})["main_camera"] = (MainCamera,)
-        # MetaDrive 0.4.3 only retains offscreen cameras when this rendering
-        # service switch is enabled. agent_observation keeps the policy-facing
-        # observation as LidarState instead of changing it to RGB.
-        cfg["image_observation"] = True
-        cfg["agent_observation"] = LidarStateObservation
+        cfg = enable_main_camera_capture(cfg)
     if policy_name == "IDMPolicy":
         # Import the native MetaDrive policy only in the process that owns the
         # engine. This keeps the parent evaluator free of Panda3D state.
@@ -273,6 +299,8 @@ def make_vec_env(
     training=True,
 ):
     """Build an SB3 VecEnv for MetaDrive."""
+    from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
+
     env_fns = [
         make_env_fn(env_config, rank=i, seed=seed, monitor_dir=monitor_dir) for i in range(n_envs)
     ]

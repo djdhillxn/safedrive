@@ -45,6 +45,11 @@ def parse_args():
     parser.add_argument("--densities", nargs="+", type=float, default=None)
     parser.add_argument("--prefix", default=None)
     parser.add_argument("--verify-repeat", action="store_true")
+    parser.add_argument(
+        "--training-smoke",
+        action="store_true",
+        help="Validate the vector, action, single-agent, and traffic interfaces before evaluation.",
+    )
     progress = parser.add_mutually_exclusive_group()
     progress.add_argument("--progress", dest="progress", action="store_true")
     progress.add_argument("--no-progress", dest="progress", action="store_false")
@@ -55,6 +60,37 @@ def parse_args():
 
 def _density_label(density):
     return f"d{int(round(float(density) * 100)):03d}"
+
+
+def _validate_training_smoke(environment, run_dir, prefix, logger):
+    records = environment.env_method("safedrive_diagnostics")
+    if len(records) != 1:
+        raise RuntimeError(f"Training smoke expected one environment, received {len(records)}.")
+    diagnostics = records[0]
+    if len(diagnostics["observation_shape"]) != 1 or diagnostics["observation_shape"][0] <= 0:
+        raise RuntimeError(
+            "Training smoke requires a one-dimensional vector observation; "
+            f"received {diagnostics['observation_shape']}."
+        )
+    if diagnostics["action_shape"] != [2]:
+        raise RuntimeError(
+            "Training smoke requires MetaDrive's two-value continuous action; "
+            f"received {diagnostics['action_shape']}."
+        )
+    if diagnostics["num_agents"] != 1 or diagnostics["is_multi_agent"]:
+        raise RuntimeError(f"Training smoke is not single-agent: {diagnostics}.")
+    if diagnostics["image_observation"] or diagnostics["render_mode"] != "none":
+        raise RuntimeError(f"Training smoke unexpectedly enabled rendering: {diagnostics}.")
+    if (
+        diagnostics["traffic_density"] > 0.0
+        and diagnostics["traffic_vehicle_count"] < 1
+    ):
+        raise RuntimeError(f"Training smoke requested traffic but spawned none: {diagnostics}.")
+    diagnostics["status"] = "passed"
+    diagnostics_path = run_dir / "eval" / f"{prefix}_training_smoke.json"
+    write_json(diagnostics, diagnostics_path)
+    logger.info("Training-critical environment smoke passed: %s", diagnostics)
+    return diagnostics
 
 
 def _evaluate_once(config, args, run_dir, prefix, policy_class_name, progress, logger):
@@ -76,6 +112,8 @@ def _evaluate_once(config, args, run_dir, prefix, policy_class_name, progress, l
         training=False,
     )
     try:
+        if args.training_smoke:
+            _validate_training_smoke(environment, run_dir, prefix, logger)
         logger.info(
             "Evaluating %s for %s episodes at traffic density %.2f.",
             policy_class_name,
@@ -173,6 +211,7 @@ def main():
     phase = str(experiment.get("phase", "phase1"))
     baseline_prefix = experiment.get("baseline_latest_prefix")
     pointer_name = f"{baseline_prefix}_{args.policy}" if baseline_prefix else args.policy
+    publish_run = not args.training_smoke and (args.split == "test" or bool(baseline_prefix))
     run_dir = make_run_dir(output_dir, run_name, None, int(experiment.get("seed", 0)))
     logging_config = base_config.get("logging", {})
     logger = setup_logging(
@@ -265,11 +304,11 @@ def main():
 
         metadata["status"] = "complete"
         metadata["completed_at_utc"] = utc_timestamp()
-        if args.split == "test" or baseline_prefix:
+        if publish_run:
             pointer = update_latest_run_file(output_dir, pointer_name, run_dir)
             metadata["outputs"]["latest_pointer"] = str(pointer)
         write_json(metadata, metadata_path)
-        if args.split == "test" or baseline_prefix:
+        if publish_run:
             append_run_manifest(
                 output_dir,
                 phase,
