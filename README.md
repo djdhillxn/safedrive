@@ -335,6 +335,12 @@ generation instead of a native EGL path that can terminate the Python process wi
 traceback. Training remains GPU-enabled; only video rendering uses this compatibility
 path. Linux hosts with a display and macOS retain Panda3D's platform-default pipe.
 
+The native Colab rendering stack is pinned to NumPy 1.26.4, OpenCV 4.11.0.86, and
+Panda3D 1.10.15. Section 7 verifies and repairs those versions when a resumed runtime did
+not rerun installation. It also creates Colab's normally absent `/dev/input` directory
+before Panda3D scans for input devices, selects Mesa's `llvmpipe` explicitly, and enables
+Python fault handling for any remaining native crash.
+
 The pinned API is `main_camera.perceive(to_float=False)`. Expected frames are
 1280×720 RGB. Failure does not silently fall back to top-down; diagnostics include render
 mode, sensors, display pipe, window type, version, commit, and frame shape.

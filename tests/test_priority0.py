@@ -1,4 +1,5 @@
 import ast
+import logging
 import math
 import random
 from pathlib import Path
@@ -41,6 +42,7 @@ from scripts.compare_runs import (
 from scripts.evaluate import _condition_config
 from scripts.record_video import (
     _needs_virtual_display,
+    _prepare_linux_input_directory,
     _raw_render_environment,
     _xvfb_command,
     select_video_scenario,
@@ -785,6 +787,31 @@ def test_chase_uses_xvfb_only_on_displayless_linux():
         "--config",
         "example.yaml",
     ]
+
+
+def test_chase_prepares_empty_linux_input_directory(tmp_path):
+    input_directory = tmp_path / "dev" / "input"
+    logger = logging.getLogger("test_video_input_directory")
+
+    assert _prepare_linux_input_directory(
+        "chase",
+        logger,
+        platform_name="linux",
+        input_directory=input_directory,
+    )
+    assert input_directory.is_dir()
+    assert not _prepare_linux_input_directory(
+        "chase",
+        logger,
+        platform_name="linux",
+        input_directory=input_directory,
+    )
+    assert not _prepare_linux_input_directory(
+        "topdown",
+        logger,
+        platform_name="linux",
+        input_directory=tmp_path / "unused",
+    )
 
 
 def test_checkpoint_selection_prioritizes_success_then_route_completion():

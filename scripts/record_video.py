@@ -28,6 +28,7 @@ from saferl_drive.utils import log_system_info, set_global_seeds, setup_logging,
 
 PINNED_METADRIVE_COMMIT = "85e5dadc6c7436d324348f6e3d8f8e680c06b4db"
 XVFB_ACTIVE = "SAFEDRIVE_XVFB_ACTIVE"
+LINUX_INPUT_DIRECTORY = Path("/dev/input")
 
 
 class _DummyActionPolicy:
@@ -135,6 +136,27 @@ def _xvfb_command(width, height, arguments=None, executable=None, xvfb_run=None)
     ]
 
 
+def _prepare_linux_input_directory(view, logger, platform_name=None, input_directory=None):
+    """Give Panda3D an empty input-device directory in minimal Linux containers."""
+    platform_name = platform_name or sys.platform
+    if view != "chase" or not platform_name.startswith("linux"):
+        return False
+    input_directory = Path(input_directory or LINUX_INPUT_DIRECTORY)
+    if input_directory.exists():
+        return False
+    try:
+        input_directory.mkdir(parents=True)
+    except OSError as error:
+        logger.warning(
+            "Could not create %s for Panda3D input discovery: %s",
+            input_directory,
+            error,
+        )
+        return False
+    logger.info("Created empty Panda3D input-device directory: %s.", input_directory)
+    return True
+
+
 def _run_with_virtual_display(args, logger):
     if not _needs_virtual_display(args.view):
         return None
@@ -142,6 +164,9 @@ def _run_with_virtual_display(args, logger):
     environment = os.environ.copy()
     environment[XVFB_ACTIVE] = "1"
     environment["LIBGL_ALWAYS_SOFTWARE"] = "1"
+    environment["MESA_LOADER_DRIVER_OVERRIDE"] = "llvmpipe"
+    environment["GALLIUM_DRIVER"] = "llvmpipe"
+    environment["PYTHONFAULTHANDLER"] = "1"
     logger.info("Relaunching chase recorder inside an Xvfb software-GL display.")
     result = subprocess.run(command, env=environment)
     if result.returncode != 0:
@@ -260,6 +285,7 @@ def main():
     environment = None
 
     try:
+        _prepare_linux_input_directory(args.view, logger)
         virtual_display_exit = _run_with_virtual_display(args, logger)
         if virtual_display_exit is not None:
             if virtual_display_exit != 0:

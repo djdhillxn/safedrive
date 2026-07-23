@@ -430,6 +430,18 @@ vector-smoke, or chase-smoke failure stops at its real source instead of surfaci
 as a missing-file assertion. Chase diagnostics include the active graphics pipe and
 window type.
 
+A second Colab attempt proved that backend selection alone was insufficient. The process
+entered Xvfb display \texttt{:99}, printed Panda3D errors because the minimal container
+had no \texttt{/dev/input}, and terminated with native exit code 139 before its first
+frame. This rules out a Python exception and rules out the earlier EGL-only diagnosis.
+That failing image had also resolved a newer native stack than the pinned MetaDrive
+snapshot: NumPy 2.0.2, OpenCV 5.0.0.93, and Panda3D 1.10.16. The repository now pins
+NumPy 1.26.4, OpenCV 4.11.0.86, and Panda3D 1.10.15. Notebook Section 7 repairs this
+stack even after a mid-notebook resume, verifies imports in a fresh subprocess, creates
+an empty \texttt{/dev/input}, selects Mesa \texttt{llvmpipe}, and enables Python fault
+handling in the renderer child. This is a compatibility correction awaiting the next
+Colab frame-producing smoke, not yet evidence that frame capture passed on Colab.
+
 Scenario selection is deterministic from episode CSVs: the lowest matching seed is used
 for first, first-success, or first-failure. Every MP4 sidecar records source, seed,
 density, mode, outcome, return, completion, collision, frame count, FPS, camera settings,
@@ -454,7 +466,7 @@ count, observation/action shapes, lidar beams, and policy/actor/critic parameter
 \section{Implementation verification record}
 No long traffic adaptation was run during implementation. Static compilation succeeded
 for \texttt{saferl\_drive}, \texttt{scripts}, and \texttt{tests}. The exact
-\texttt{pytest -q} invocation passed all 49 tests. The suite covers traffic configuration
+\texttt{pytest -q} invocation passed all 54 tests. The suite covers traffic configuration
 invariants, stage resolution, warm-start lineage, fresh-replay behavior, immutable resume
 checks, density matrices, exclusive outcomes, latest pointers, fingerprints, selection,
 Drive critical files, video sidecars, and notebook structure.
@@ -473,10 +485,11 @@ training over the full budgets, Stage-A qualification, pilot selection, seed-1
 confirmation, and final statistics remain Colab responsibilities.
 
 \section{Colab and Drive record}
-The observed Phase-2 runtime was Google Colab with an NVIDIA L4 on 22 July 2026:
+The failing Phase-2 render runtime was Google Colab with an NVIDIA L4 on 22 July 2026:
 Python 3.12.13, MetaDrive 0.4.3, Stable-Baselines3 2.9.0, Gymnasium 1.3.0,
-PyTorch 2.11.0/CUDA 12.8, and NumPy 2.0.2. New runs record their actual environment rather
-than assuming these versions.
+PyTorch 2.11.0/CUDA 12.8, NumPy 2.0.2, OpenCV 5.0.0.93, and Panda3D 1.10.16.
+The canonical renderer now uses the compatibility pins above. New runs record their
+actual environment rather than assuming these versions.
 
 The live Git clone is \texttt{/content/safedrive}; persistent storage is
 \texttt{/content/drive/MyDrive/SafeDrive}. Code never runs from mounted Drive. A run sync
