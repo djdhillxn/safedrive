@@ -40,7 +40,7 @@ from scripts.compare_runs import (
     _traffic_effects,
     select_traffic_pilot,
 )
-from scripts.evaluate import _condition_config
+from scripts.evaluate import _condition_config, _load_model
 from scripts.record_video import (
     _camera_config,
     _raw_render_environment,
@@ -885,12 +885,31 @@ def test_compiled_dependency_pins_agree_for_clean_colab_installation():
     project = Path("pyproject.toml").read_text(encoding="utf-8")
 
     for requirement in [
-        "numpy==1.26.4",
+        "numpy==2.0.2",
         "opencv-python==4.11.0.86",
         "panda3d==1.10.16",
     ]:
         assert requirement in requirements
         assert f'"{requirement}"' in project
+
+
+def test_checkpoint_numpy_deserialization_error_is_not_mislabeled_as_space_mismatch():
+    class BrokenAlgorithm:
+        @classmethod
+        def load(cls, model_path, env, device):
+            raise ModuleNotFoundError(
+                "No module named 'numpy._core.numeric'",
+                name="numpy._core.numeric",
+            )
+
+    try:
+        _load_model(BrokenAlgorithm, "model.zip", object(), "cpu")
+    except RuntimeError as error:
+        message = str(error)
+        assert "deserialization failed before observation/action-space" in message
+        assert "numpy._core.numeric" in message
+    else:
+        raise AssertionError("A NumPy checkpoint deserialization error should fail clearly.")
 
 
 def test_checkpoint_selection_prioritizes_success_then_route_completion():

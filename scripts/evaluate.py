@@ -67,6 +67,21 @@ def _condition_config(config, split, density):
     )
 
 
+def _load_model(algorithm_class, model_path, environment, load_device):
+    try:
+        return algorithm_class.load(model_path, env=environment, device=load_device)
+    except ModuleNotFoundError as error:
+        missing_module = error.name or ""
+        if missing_module.startswith("numpy."):
+            raise RuntimeError(
+                "Checkpoint deserialization failed before observation/action-space "
+                f"compatibility could be checked: missing module {missing_module!r}. "
+                "Use the project-pinned NumPy runtime that created the checkpoint, then "
+                "restart the Python process if NumPy was replaced in a live session."
+            ) from error
+        raise
+
+
 def _evaluate_condition(
     args,
     config,
@@ -129,7 +144,17 @@ def _evaluate_condition(
             environment.norm_reward = False
             logger.debug("Loaded VecNormalize statistics: %s", vecnormalize_path)
 
-        model = algorithm_class.load(model_path, env=environment, device=load_device)
+        model = _load_model(
+            algorithm_class,
+            model_path,
+            environment,
+            load_device,
+        )
+        logger.info(
+            "Checkpoint interface passed SB3 compatibility checks: observation=%s; action=%s.",
+            model.observation_space,
+            model.action_space,
+        )
         logger.info(
             "Evaluating %s episodes at traffic density %.2f from scenario seed %s.",
             episode_count,

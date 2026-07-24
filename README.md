@@ -346,11 +346,14 @@ or launch Xvfb and does not inject a software-GL backend. A failed official veri
 recorded as a MetaDrive/Panda3D/runtime capability failure before SafeDrive's camera code
 is attempted.
 
-For reproducibility, the project currently pins NumPy 1.26.4, OpenCV 4.11.0.86, and
-Panda3D 1.10.16 during the one clean installation step. These are project environment
-choices, not a claim that NumPy fixes the archived native crash or that MetaDrive itself
-requires these exact versions. The notebook never hot-swaps compiled wheels in the smoke
-cell.
+For reproducibility, the project currently pins NumPy 2.0.2, OpenCV 4.11.0.86, and
+Panda3D 1.10.16 during the one clean installation step. NumPy 2.0.2 matches the runtime
+that serialized the archived SAC checkpoints; loading those SB3 archives under NumPy
+1.26 fails while unpickling their stored Gymnasium spaces, before observation/action
+compatibility can be checked. These remain project environment choices, not a claim that
+NumPy fixes the archived native rendering crash or that MetaDrive itself requires these
+exact versions. If installation changes a compiled package already loaded by the Colab
+kernel, the notebook stops and requires one runtime restart before any experiment runs.
 
 The pinned capture API is
 `env.engine.get_sensor("main_camera").perceive(to_float=False)`. Frames are collected
